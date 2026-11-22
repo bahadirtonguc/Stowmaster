@@ -8,7 +8,9 @@
 // ("column"), as long as the column stays inside the layer height.
 
 const EPS = 1e-9;
-const CARGO_COLUMNS = ['ad', 'uzunluk', 'genislik', 'yukseklik', 'agirlik', 'adet', 'oncelik', 'istiflenebilir', 'kisit', 'ust_yuk'];
+const CARGO_COLUMNS = ['ad', 'uzunluk', 'genislik', 'yukseklik', 'agirlik', 'adet', 'oncelik', 'istiflenebilir', 'kisit', 'ust_yuk', 'sekil', 'yatis'];
+const SHAPE_NAMES = ['kutu', 'silindir', 'cizim'];
+const CYL_ORIENTS = ['dik', 'boyuna', 'enine'];
 const REQUIRED_COLUMNS = 5; // ad .. agirlik
 const MAX_QTY = 1000;       // per row
 const MAX_ITEMS = 5000;     // per list
@@ -114,13 +116,39 @@ function parseCargoChecked(text, opts = {}) {
       else if (maxTop < 0) err(line, `ust_yuk negatif olamaz: ${c[9]}.`, 'ust_yuk');
     }
 
+    // shape: kutu (default) | silindir (needs yatis) | cizim (needs a drawing for this name)
+    const sk = (c[10] || '').toLowerCase();
+    const yt = (c[11] || '').toLowerCase();
+    let shape = BOX, dims = null;
+    if (sk && !SHAPE_NAMES.includes(sk)) {
+      err(line, `sekil "kutu", "silindir" ya da "cizim" olmalı: "${c[10]}".`, 'sekil');
+    } else if (sk === 'silindir') {
+      if (!yt) err(line, `"${name}" silindir: yatış yönünü seç (yatis kolonu): dik, boyuna ya da enine.`, 'yatis');
+      else if (!CYL_ORIENTS.includes(yt)) err(line, `yatis "dik", "boyuna" ya da "enine" olmalı: "${c[11]}".`, 'yatis');
+      if (Number.isFinite(w) && Number.isFinite(h) && !near(w, h)) {
+        err(line, `Silindirde genislik ve yukseklik çaptır, eşit olmalı (${c[2]} ≠ ${c[3]}).`, 'yukseklik');
+      }
+      if (CYL_ORIENTS.includes(yt)) {
+        shape = { kind: 'cyl', orient: yt };
+        // bounding box in hold axes; lying cylinders keep their axis direction
+        dims = yt === 'dik' ? [w, w, l, false] : yt === 'boyuna' ? [l, w, w, true] : [w, l, w, true];
+      }
+    } else if (sk === 'cizim') {
+      const sh = opts.shapes && opts.shapes[name];
+      if (!sh) err(line, `"${name}" için çizim yüklenmedi (sekil=cizim).`, 'sekil');
+      else shape = sh;
+    }
+    if (yt && sk !== 'silindir') err(line, 'yatis yalnızca silindir için girilir.', 'yatis');
+
     if (errors.length > before) continue;
     if (items.length + qty > MAX_ITEMS) {
       err(line, `Toplam kalem sayısı ${MAX_ITEMS} sınırını aşıyor.`);
       break;
     }
     for (let k = 0; k < qty; k++) {
-      items.push({ uid: uid++, id: `${name} #${k + 1}`, name, l, w, h, wt, prio, stack, restr, maxTop, line });
+      const [bl, bw, bh, fixedRot] = dims || [l, w, h, false];
+      items.push({ uid: uid++, id: `${name} #${k + 1}`, name, l: bl, w: bw, h: bh, wt, prio, stack, restr, maxTop,
+        shape, fixedRot, line });
     }
   }
   return { items, errors, warnings };
@@ -157,6 +185,50 @@ function validateVessel(v, maxT, rules) {
   return errors;
 }
 
+// ---------------------------------------------------------------- shapes
+//
+// Every item is placed by its bounding box (l x w x h). The shape only tells how much of
+// that box is cargo, and how to draw it:
+//   box  : the whole box
+//   cyl  : cylinder; orient 'dik' (axis vertical), 'boyuna' (axis along the length, x),
+//          'enine' (axis across, y)
+//   hull : shape from two drawing views (top: x-y, side: x-z), the largest solid that
+//          matches both views (it is never smaller than the real part)
+
+const BOX = { kind: 'box' };
+
+// top: nx*ny cells (index i + nx*j), side: nx*nz cells (index i + nx*k, k = 0 at the bottom)
+function hullShape(top, side, nx, ny, nz) {
+  let vox = 0;
+  for (let i = 0; i < nx; i++) {
+    let a = 0, b = 0;
+    for (let j = 0; j < ny; j++) a += top[i + nx * j] ? 1 : 0;
+    for (let k = 0; k < nz; k++) b += side[i + nx * k] ? 1 : 0;
+    vox += a * b;
+  }
+  return { kind: 'hull', nx, ny, nz, top: Array.from(top, x => (x ? 1 : 0)), side: Array.from(side, x => (x ? 1 : 0)), volFrac: vox / (nx * ny * nz) };
+}
+
+function volFrac(shape) {
+  if (!shape || shape.kind === 'box') return 1;
+  if (shape.kind === 'cyl') return Math.PI / 4;
+  return shape.volFrac;
+}
+
+// Silhouettes of a hull along the three axes: xy (top), xz (side), yz (end).
+function hullViews(sh) {
+  const yz = new Array(sh.ny * sh.nz).fill(0);
+  for (let j = 0; j < sh.ny; j++) for (let k = 0; k < sh.nz; k++) {
+    for (let i = 0; i < sh.nx; i++) {
+      if (sh.top[i + sh.nx * j] && sh.side[i + sh.nx * k]) { yz[j + sh.ny * k] = 1; break; }
+    }
+  }
+  return { xy: sh.top, xz: sh.side, yz };
+}
+
+// Only flat-topped boxes carry other items inside a layer (columns).
+const flatTop = it => !it.shape || it.shape.kind === 'box';
+
 // ---------------------------------------------------------------- geometry
 
 function widthAt(v, z) {
@@ -178,7 +250,7 @@ function allowed(it, hi, z) {
 
 function fitsWidth(v, it, z) {
   const W = minWidth(v, z, z + it.h);
-  return (it.l <= v.L + EPS && it.w <= W + EPS) || (it.w <= v.L + EPS && it.l <= W + EPS);
+  return (it.l <= v.L + EPS && it.w <= W + EPS) || (!it.fixedRot && it.w <= v.L + EPS && it.l <= W + EPS);
 }
 
 const near = (a, b) => Math.abs(a - b) <= 1e-6;
@@ -291,28 +363,30 @@ function fillLayer(v, hs, pending, used, layerH, maxT, opts) {
   const stripStart = () => (rules.balancePortStbd && moment < -1e-9 ? [-1, half] : [1, -half]);
 
   const ok = (it, zz) => !used.has(it.uid) && !taken.has(it.uid) && allowed(it, hi, zz) && wt + it.wt <= maxT + EPS;
-  const make = (it, a, b, x, yy, zz, col) => ({ ...it, hold: hi + 1, x, y: yy, z: zz, ax: a, by: b, layerZ: z, layerH, col });
+  // rot: item turned 90 degrees (its own l now runs across the hold)
+  const make = (it, a, b, x, yy, zz, col, rot) => ({ ...it, hold: hi + 1, x, y: yy, z: zz, ax: a, by: b, layerZ: z, layerH, col, rot });
   const commit = rec => {
     layer.push(rec);
     below.push(rec);
     taken.add(rec.uid);
     if (rec.maxTop != null) layerTop = true;
     wt += rec.wt;
-    vol += rec.ax * rec.by * rec.h;
+    vol += rec.ax * rec.by * rec.h * volFrac(rec.shape);
     moment += momentOf(rec);
     return rec;
   };
 
   // Items with the same footprint on top of a stackable base, inside the layer height.
   const stackOn = base => {
-    if (!opts.stackInLayer || !base.stack) return;
+    if (!opts.stackInLayer || !base.stack || !flatTop(base)) return;
     let top = base.z + base.h;
     for (const it of pending) {
       if (top + it.h > z + layerH + EPS) continue;
-      if (!ok(it, top) || !it.stack) continue;
-      const same = (near(it.l, base.ax) && near(it.w, base.by)) || (near(it.w, base.ax) && near(it.l, base.by));
-      if (!same) continue;
-      const rec = make(it, base.ax, base.by, base.x, base.y, top, base.col);
+      if (!ok(it, top) || !it.stack || !flatTop(it)) continue;
+      const straight = near(it.l, base.ax) && near(it.w, base.by);
+      const turned = !it.fixedRot && near(it.w, base.ax) && near(it.l, base.by);
+      if (!straight && !turned) continue;
+      const rec = make(it, base.ax, base.by, base.x, base.y, top, base.col, !straight);
       if (!loadOk(rec, below, rules, anyTop || layerTop)) continue;
       commit(rec);
       top += it.h;
@@ -320,13 +394,13 @@ function fillLayer(v, hs, pending, used, layerH, maxT, opts) {
   };
 
   const fit = it => {
-    const rots = it.fixedRot ? [[it.l, it.w]] : [[it.l, it.w], [it.w, it.l]];
-    for (const [a, b] of rots) {
+    const rots = it.fixedRot ? [[it.l, it.w, false]] : [[it.l, it.w, false], [it.w, it.l, true]];
+    for (const [a, b, rot] of rots) {
       if (b > W + EPS) continue;
       // continue the current strip
       const yy = dir > 0 ? y : y - b;
       if (yy >= -half - EPS && yy + b <= half + EPS && x0 + Math.max(sL, a) <= v.L + EPS) {
-        const rec = make(it, a, b, x0, yy, z, colN);
+        const rec = make(it, a, b, x0, yy, z, colN, rot);
         if (loadOk(rec, below, rules, anyTop || layerTop)) {
           colN++;
           y = dir > 0 ? y + b : y - b;
@@ -337,7 +411,7 @@ function fillLayer(v, hs, pending, used, layerH, maxT, opts) {
       // open a new strip
       if (x0 + sL + a <= v.L + EPS) {
         const [d, y0] = stripStart();
-        const rec = make(it, a, b, x0 + sL, d > 0 ? y0 : y0 - b, z, colN);
+        const rec = make(it, a, b, x0 + sL, d > 0 ? y0 : y0 - b, z, colN, rot);
         if (loadOk(rec, below, rules, anyTop || layerTop)) {
           colN++;
           x0 += sL;
@@ -481,16 +555,17 @@ function planAll(v, items, maxT, opts = {}) {
 function holdMetrics(v, placed) {
   const holdVol = Math.max(0, v.L * (v.bB + v.bT) / 2 * v.H);
   const cols = new Map(), layers = new Map();
-  let cargoVol = 0;
+  let cargoVol = 0, boxVol = 0;
   for (const q of placed) {
-    cargoVol += q.ax * q.by * q.h;
+    boxVol += q.ax * q.by * q.h;
+    cargoVol += q.ax * q.by * q.h * volFrac(q.shape);
     const key = q.layerZ + ':' + q.col;
     const c = cols.get(key) || { area: q.ax * q.by, layerZ: q.layerZ, layerH: q.layerH, top: q.layerZ };
     c.top = Math.max(c.top, q.z + q.h);
     cols.set(key, c);
     const L = layers.get(q.layerZ) || { z: q.layerZ, h: q.layerH, items: 0, cargoVol: 0, gapVol: 0, maxGap: 0 };
     L.items++;
-    L.cargoVol += q.ax * q.by * q.h;
+    L.cargoVol += q.ax * q.by * q.h * volFrac(q.shape);
     layers.set(q.layerZ, L);
   }
   let gapVol = 0, maxGap = 0;
@@ -505,14 +580,16 @@ function holdMetrics(v, placed) {
   const layerList = [...layers.values()].sort((a, b) => a.z - b.z);
   const wm = weightMetrics(placed);
   const stackTop = layerList.reduce((m, L) => Math.max(m, L.z + L.h), 0);
-  const occupiedVol = cargoVol + gapVol;
+  const occupiedVol = boxVol + gapVol;
+  const shapeLossVol = boxVol - cargoVol;
   return {
-    holdVol, cargoVol, gapVol, occupiedVol, maxGap,
+    holdVol, cargoVol, boxVol, shapeLossVol, gapVol, occupiedVol, maxGap,
     headroom: Math.max(0, v.H - stackTop),       // empty height above the top layer
     utilization: holdVol > 0 ? cargoVol / holdVol : 0,              // net: cargo / hold
-    utilizationWithGaps: holdVol > 0 ? occupiedVol / holdVol : 0,   // cargo + vertical gaps / hold
+    utilizationWithGaps: holdVol > 0 ? occupiedVol / holdVol : 0,   // bounding boxes + vertical gaps / hold
     gapShare: holdVol > 0 ? gapVol / holdVol : 0,                   // lost to vertical gaps / hold
-    layerFill: occupiedVol > 0 ? cargoVol / occupiedVol : 0,        // 1 = no vertical gaps
+    shapeLossShare: holdVol > 0 ? shapeLossVol / holdVol : 0,       // lost inside non-box shapes / hold
+    layerFill: occupiedVol > 0 ? cargoVol / occupiedVol : 0,        // 1 = no vertical gaps and box shapes only
     layers: layerList,
     ...wm
   };
@@ -566,17 +643,19 @@ function floorPressure(placed) {
 function planMetrics(v, res) {
   const holds = res.holds.map(h => holdMetrics(v, h.placed));
   const sum = k => holds.reduce((s, m) => s + m[k], 0);
-  const holdVol = sum('holdVol'), cargoVol = sum('cargoVol'), gapVol = sum('gapVol');
+  const holdVol = sum('holdVol'), cargoVol = sum('cargoVol'), gapVol = sum('gapVol'), boxVol = sum('boxVol');
   const ws = holds.map(m => m.weight);
+  const occupiedVol = boxVol + gapVol;
   return {
-    holds, holdVol, cargoVol, gapVol, occupiedVol: cargoVol + gapVol,
+    holds, holdVol, cargoVol, boxVol, shapeLossVol: boxVol - cargoVol, gapVol, occupiedVol,
     weight: sum('weight'),
     holdWeightSpread: ws.length ? Math.max(...ws) - Math.min(...ws) : 0, // heaviest - lightest hold
     maxFloorPressure: holds.reduce((m, h) => Math.max(m, h.maxFloorPressure), 0),
     utilization: holdVol > 0 ? cargoVol / holdVol : 0,
-    utilizationWithGaps: holdVol > 0 ? (cargoVol + gapVol) / holdVol : 0,
+    utilizationWithGaps: holdVol > 0 ? occupiedVol / holdVol : 0,
     gapShare: holdVol > 0 ? gapVol / holdVol : 0,
-    layerFill: cargoVol + gapVol > 0 ? cargoVol / (cargoVol + gapVol) : 0
+    shapeLossShare: holdVol > 0 ? (boxVol - cargoVol) / holdVol : 0,
+    layerFill: occupiedVol > 0 ? cargoVol / occupiedVol : 0
   };
 }
 
@@ -611,7 +690,7 @@ const STRATEGIES = [
 // opts.iterations: local search steps (default 150, 0 disables).
 // opts.rules: weight rules, see rulesOf(); they are hard limits for every candidate plan.
 function planBest(v, items, maxT, opts = {}) {
-  const vol = it => it.l * it.w * it.h;
+  const vol = it => it.l * it.w * it.h * volFrac(it.shape);
   const orders = [
     ['prio,volume', [...items].sort((a, b) => a.prio - b.prio || vol(b) - vol(a))],
     ['prio,area', [...items].sort((a, b) => a.prio - b.prio || b.l * b.w - a.l * a.w)],
@@ -660,6 +739,7 @@ if (typeof module !== 'undefined') {
     parseCargo, parseCargoChecked, formatIssue, validateVessel, parseNum,
     widthAt, minWidth, allowed, fitsWidth, fillLayer, planHold, planAll, planBest,
     holdMetrics, planMetrics, weightMetrics, floorPressure, rulesOf, loadOk,
+    hullShape, hullViews, volFrac, SHAPE_NAMES, CYL_ORIENTS,
     CARGO_COLUMNS, MAX_QTY, MAX_ITEMS
   };
 }

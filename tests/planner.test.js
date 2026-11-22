@@ -30,9 +30,11 @@ function checkPlan(res, v, maxT, items, rules = {}) {
       assert(!seen.has(q.uid), `${q.id} placed twice`);
       seen.add(q.uid);
       assert.strictEqual(q.hold, h.hi + 1);
-      // footprint matches the item (possibly rotated), height unchanged
-      assert((Math.abs(q.ax - q.l) < TOL && Math.abs(q.by - q.w) < TOL) ||
-             (Math.abs(q.ax - q.w) < TOL && Math.abs(q.by - q.l) < TOL), `${q.id} footprint changed`);
+      // footprint matches the item (possibly rotated, never for fixed-axis items), height unchanged
+      const straight = Math.abs(q.ax - q.l) < TOL && Math.abs(q.by - q.w) < TOL;
+      const turned = Math.abs(q.ax - q.w) < TOL && Math.abs(q.by - q.l) < TOL;
+      assert(straight || (!q.fixedRot && turned), `${q.id} footprint changed`);
+      assert(q.rot ? turned : straight, `${q.id} rot flag wrong`);
       // inside hold length and height
       assert(q.x >= -TOL && q.x + q.ax <= v.L + TOL, `${q.id} outside length`);
       assert(q.z >= -TOL && q.z + q.h <= v.H + TOL, `${q.id} outside height`);
@@ -47,7 +49,7 @@ function checkPlan(res, v, maxT, items, rules = {}) {
       if (!q.stack) assert(q.z < TOL, `non-stackable ${q.id} above floor`);
       // inside a layer, an item above the layer base sits fully on a stackable item of the same footprint
       if (q.z > q.layerZ + TOL) {
-        assert(h.placed.some(r => r !== q && r.stack && Math.abs(r.x - q.x) < TOL && Math.abs(r.y - q.y) < TOL &&
+        assert(h.placed.some(r => r !== q && r.stack && (!r.shape || r.shape.kind === 'box') && Math.abs(r.x - q.x) < TOL && Math.abs(r.y - q.y) < TOL &&
           Math.abs(r.ax - q.ax) < TOL && Math.abs(r.by - q.by) < TOL && Math.abs(r.z + r.h - q.z) < TOL),
           `${q.id} not supported inside its layer`);
       }
@@ -93,10 +95,11 @@ function checkPlan(res, v, maxT, items, rules = {}) {
   for (const k of ['holdVol', 'cargoVol', 'gapVol', 'utilization', 'utilizationWithGaps', 'gapShare', 'layerFill']) {
     assert(Number.isFinite(m[k]) && m[k] >= -TOL, `metric ${k} = ${m[k]}`);
   }
-  assert(Math.abs(m.cargoVol - volOf(res)) < 1e-6);
+  assert(Math.abs(m.boxVol - volOf(res)) < 1e-6);
+  assert(m.cargoVol <= m.boxVol + 1e-9);
   if (m.holdVol > 0) {
-    assert(m.utilizationWithGaps <= 1 + 1e-6, 'cargo + gaps exceed hold volume');
-    assert(Math.abs(m.utilizationWithGaps - m.utilization - m.gapShare) < 1e-9);
+    assert(m.utilizationWithGaps <= 1 + 1e-6, 'boxes + gaps exceed hold volume');
+    assert(Math.abs(m.utilizationWithGaps - m.utilization - m.gapShare - m.shapeLossShare) < 1e-9);
   }
   return m;
 }
@@ -350,6 +353,87 @@ test('vessel validation', () => {
   assert.strictEqual(P.validateVessel(v, NaN).length, 1);
 });
 
+// ------------------------------------------------------------- shapes
+
+// L-shaped part: top view full, side view L (tall at the front half only)
+function lShape(n = 8) {
+  const top = new Array(n * n).fill(1);
+  const side = [];
+  for (let k = 0; k < n; k++) for (let i = 0; i < n; i++) side.push(k < n / 2 || i < n / 2 ? 1 : 0);
+  return P.hullShape(top, side, n, n, n);
+}
+
+test('hull shape from two views', () => {
+  const sh = lShape(8);
+  assert(Math.abs(sh.volFrac - 0.75) < 1e-12);
+  const views = P.hullViews(sh);
+  assert.strictEqual(views.yz.reduce((a, b) => a + b, 0), 64); // end view is full (tall half spans all y, z)
+  // a box drawn in both views is a full box
+  const full = P.hullShape(new Array(16).fill(1), new Array(16).fill(1), 4, 4, 4);
+  assert.strictEqual(full.volFrac, 1);
+  // a circle in the top view and a full side view: about pi/4
+  const n = 40, top = [];
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) top.push((i + 0.5 - n / 2) ** 2 + (j + 0.5 - n / 2) ** 2 <= (n / 2) ** 2 ? 1 : 0);
+  const cyl = P.hullShape(top, new Array(n * n).fill(1), n, n, n);
+  assert(Math.abs(cyl.volFrac - Math.PI / 4) < 0.02);
+});
+
+test('CSV: shapes and cylinder orientation', () => {
+  const H = `${HEADER},ust_yuk,sekil,yatis`;
+  const r = P.parseCargoChecked([H,
+    'Bobin,2,1.5,1.5,8,1,1,yes,,,silindir,',        // 2 missing orientation -> ask the user
+    'Boru,6,0.5,0.5,1,1,1,yes,,,silindir,yan',      // 3 bad orientation
+    'Tank,3,2,1.8,4,1,1,yes,,,silindir,dik',        // 4 diameter mismatch
+    'Kutu,1,1,1,1,1,1,yes,,,kutu,dik',              // 5 orientation on a box
+    'Garip,1,1,1,1,1,1,yes,,,kure,',                // 6 unknown shape
+    'Makine,3,2,2,5,1,1,no,,,cizim,',               // 7 no drawing loaded
+    'Iyi,1,1,1,1,1,1,yes,,,,'                       // 8 ok (box)
+  ].join('\n'));
+  const at = l => r.errors.filter(e => e.line === l);
+  assert(/yatış yönünü seç/.test(at(2)[0].message) && at(2)[0].column === 'yatis');
+  assert.strictEqual(at(3)[0].column, 'yatis');
+  assert.strictEqual(at(4)[0].column, 'yukseklik');
+  assert.strictEqual(at(5)[0].column, 'yatis');
+  assert.strictEqual(at(6)[0].column, 'sekil');
+  assert(/çizim yüklenmedi/.test(at(7)[0].message));
+  assert.strictEqual(at(8).length, 0);
+  assert.strictEqual(r.items.length, 1);
+
+  // with the drawing loaded the item is accepted
+  const ok = P.parseCargoChecked(`${H}\nMakine,3,2,2,5,1,1,no,,,cizim,`, { shapes: { Makine: lShape() } });
+  assert.deepStrictEqual(ok.errors, []);
+  assert.strictEqual(ok.items[0].shape.kind, 'hull');
+});
+
+test('cylinders keep their axis', () => {
+  const H = `${HEADER},ust_yuk,sekil,yatis`;
+  const its = P.parseCargo(`${H}\nB1,4,1,1,2,1,1,yes,,,silindir,boyuna\nB2,4,1,1,2,1,1,yes,,,silindir,enine\nB3,4,1,1,2,1,1,yes,,,silindir,dik`);
+  assert.deepStrictEqual([its[0].l, its[0].w, its[0].h, its[0].fixedRot], [4, 1, 1, true]);
+  assert.deepStrictEqual([its[1].l, its[1].w, its[1].h, its[1].fixedRot], [1, 4, 1, true]);
+  assert.deepStrictEqual([its[2].l, its[2].w, its[2].h, its[2].fixedRot], [1, 1, 4, false]);
+  // a 4 m long cylinder lying across does not fit a 3 m wide hold, even though it would fit lengthwise
+  const hv = { n: 1, L: 10, bB: 3, bT: 3, H: 5 };
+  const res = P.planBest(hv, [its[1]], 100);
+  assert.strictEqual(res.pending.length, 1);
+  const res2 = P.planBest(hv, [its[0]], 100);
+  assert.strictEqual(res2.holds[0].placed[0].ax, 4);
+  // volume is pi/4 of the box
+  const m = P.planMetrics(hv, res2);
+  assert(Math.abs(m.cargoVol - Math.PI) < 1e-9 && Math.abs(m.boxVol - 4) < 1e-9);
+  assert(Math.abs(m.shapeLossVol - (4 - Math.PI)) < 1e-9);
+});
+
+test('nothing is stacked on a cylinder or a drawn shape inside a layer', () => {
+  const H = `${HEADER},ust_yuk,sekil,yatis`;
+  const hv = { n: 1, L: 2, bB: 2, bT: 2, H: 2 };
+  for (const row of ['Alt,1,2,2,5,1,1,yes,,,silindir,dik', 'Alt,2,2,1,5,1,1,yes,,,cizim,']) {
+    const its = P.parseCargo(`${H}\nUzun,2,2,2,9,1,1,yes,\n${row}\nUst,2,2,1,1,1,1,yes,`, { shapes: { Alt: lShape() } });
+    const placed = P.planHold(hv, 0, [its[1], its[2], its[0]], 100, { layerMode: 'seed', stackInLayer: true });
+    assert(!placed.some(q => q.name === 'Ust' && q.z > 0 && q.layerZ === 0), row);
+    checkPlan({ holds: [{ hi: 0, placed }], pending: [] }, hv, 100);
+  }
+});
+
 // ------------------------------------------------------------- weight rules
 
 const ALL_RULES = { balanceHolds: true, balancePortStbd: true, heavyBelow: true };
@@ -490,23 +574,30 @@ test(`random scenarios (${RANDOM_CASES})`, () => {
     const nRows = 1 + Math.floor(rnd() * 12);
     for (let i = 0; i < nRows; i++) {
       const restr = rnd() < 0.1 ? 'H' + (1 + Math.floor(rnd() * 5)) : '';
-      rows.push([`X${i}`, (0.5 + rnd() * 3).toFixed(2), (0.5 + rnd() * 2.5).toFixed(2),
-        (0.3 + rnd() * 2.5).toFixed(dense ? 1 : 2), rnd() < 0.05 ? '0' : (0.2 + rnd() * 6).toFixed(2),
+      const kind = rnd();
+      const l = (0.5 + rnd() * 3).toFixed(2), w = (0.5 + rnd() * 2.5).toFixed(2);
+      const h = kind < 0.15 ? w : (0.3 + rnd() * 2.5).toFixed(dense ? 1 : 2);
+      const shapeCols = kind < 0.15 ? ['silindir', P.CYL_ORIENTS[Math.floor(rnd() * 3)]] : kind < 0.25 ? ['cizim', ''] : ['', ''];
+      rows.push([`X${i}`, l, w, h, rnd() < 0.05 ? '0' : (0.2 + rnd() * 6).toFixed(2),
         1 + Math.floor(rnd() * (dense ? 30 : 8)), 1 + Math.floor(rnd() * 3),
-        rnd() < 0.3 ? 'no' : 'yes', restr].join(','));
+        rnd() < 0.3 ? 'no' : 'yes', restr, '', ...shapeCols].join(','));
     }
     const vv = { n: 1 + Math.floor(rnd() * 4), L: 4 + rnd() * 26, bB: 3 + rnd() * 15, bT: 3 + rnd() * 12, H: 2 + rnd() * 12 };
     if (rnd() < 0.8) vv.bT = Math.min(vv.bT, vv.bB); // most holds narrow upwards, some widen
     const mt = rnd() < 0.05 ? 0 : 20 + rnd() * 330;
-    const its = P.parseCargo(rows.join('\n'));
+    const shapes = {};
+    for (let i = 0; i < nRows; i++) shapes[`X${i}`] = lShape(4 + (i % 5));
+    const its = P.parseCargo(rows.join('\n'), { shapes });
     const r = P.planBest(vv, its, mt, { iterations: 40, seed: t });
     checkPlan(r, vv, mt, its);
     // never worse than the original method on the same ordering
     const base = P.planAll(vv, [...its].sort((a, b) => a.prio - b.prio || b.l * b.w * b.h - a.l * a.w * a.h), mt,
       { layerMode: 'seed', stackInLayer: false });
     checkPlan(base, vv, mt, its);
-    assert(volOf(r) >= volOf(base) - 1e-6, `case ${t}: worse than original method`);
-    gain += volOf(r) - volOf(base);
+    // compare real cargo volume (cylinders and drawn shapes count less than their box)
+    const cv = res => P.planMetrics(vv, res).cargoVol;
+    assert(cv(r) >= cv(base) - 1e-6, `case ${t}: worse than original method`);
+    gain += cv(r) - cv(base);
   }
   console.log(`random: ${RANDOM_CASES} cases ok, extra volume vs original method ${gain.toFixed(1)} m3`);
 });

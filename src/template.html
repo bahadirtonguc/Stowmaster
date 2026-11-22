@@ -22,6 +22,13 @@ th{background:#f3f5f8}
 .drawings svg{width:100%;height:auto;background:#fafbfd;border:1px solid #ddd;border-radius:4px}
 .cap{font-size:12px;color:#555;margin:2px 0 6px}
 .sum{font-size:14px;margin:10px 0}
+.err{background:#fdecea;border:1px solid #e57373;padding:8px 12px;border-radius:6px;font-size:13px;margin-top:10px}
+.err ul,.note ul{margin:4px 0 0;padding-left:20px}
+.note{background:#f3f5f8;border:1px solid #c9d2de;padding:8px 12px;border-radius:6px;font-size:13px;margin-top:10px}
+.metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;margin:6px 0}
+.metrics div{background:#f3f5f8;border-radius:4px;padding:5px 8px;font-size:12px}
+.metrics b{display:block;font-size:14px}
+@media (max-width:700px){.grid{grid-template-columns:1fr 1fr}.drawings{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -39,7 +46,7 @@ th{background:#f3f5f8}
 </div>
 
 <h3>Yük listesi (packing list)</h3>
-<p style="font-size:12px;margin:0 0 6px">Format: ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t), adet, öncelik (1 önce), istiflenebilir (yes/no), kısıt (boş ya da H1, H2 ... ile tek hold)</p>
+<p style="font-size:12px;margin:0 0 6px">Format: ilk satır başlık; sonra ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t) zorunlu; adet (boşsa 1), öncelik (1 önce, boşsa 9), istiflenebilir (yes/no, boşsa yes), kısıt (boş ya da H1, H2 ... ile tek hold) isteğe bağlı. Ondalık ayırıcı nokta. Hatalı satır varsa plan oluşturulmaz, hatalar satır numarasıyla listelenir. Aşağıdaki liste örnektir.</p>
 <textarea id="cargo"></textarea>
 <br>
 <button id="run">Planı oluştur</button><button id="csv">Yükleme listesini CSV indir</button>
@@ -51,6 +58,8 @@ th{background:#f3f5f8}
 
 const $ = id => document.getElementById(id);
 let lastPlan = null;
+const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+const pct = x => '%' + (100 * x).toFixed(1);
 
 $('cargo').value = `ad,uzunluk,genislik,yukseklik,agirlik,adet,oncelik,istiflenebilir,kisit
 Kutu A,1.2,0.8,0.8,0.6,20,2,yes,
@@ -72,7 +81,7 @@ function topSvg(v, placed) {
   s += `<rect x="0" y="${c - v.bB / 2}" width="${v.L}" height="${v.bB}" fill="none" stroke="#999" stroke-dasharray="0.3 0.2" stroke-width="0.05"/>`;
   s += `<rect x="0" y="${c - v.bT / 2}" width="${v.L}" height="${v.bT}" fill="none" stroke="#333" stroke-width="0.06"/>`;
   placed.forEach(q => {
-    s += `<rect x="${q.x}" y="${q.y + c}" width="${q.ax}" height="${q.by}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${q.id} | z=${q.z.toFixed(2)} m</title></rect>`;
+    s += `<rect x="${q.x}" y="${q.y + c}" width="${q.ax}" height="${q.by}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${esc(q.id)} | z=${q.z.toFixed(2)} m</title></rect>`;
   });
   s += `<text x="${v.L / 2}" y="${W + 0.8}" text-anchor="middle" font-size="0.45">L = ${v.L} m (üst görünüm)</text>`;
   return s + '</svg>';
@@ -82,8 +91,11 @@ function elevSvg(v, placed) {
   const p = 1;
   let s = `<svg viewBox="${-p} ${-p} ${v.L + 2 * p} ${v.H + 2 * p}">`;
   s += `<rect x="0" y="0" width="${v.L}" height="${v.H}" fill="none" stroke="#333" stroke-width="0.06"/>`;
+  [...new Set(placed.map(q => q.layerZ + q.layerH))].forEach(t => {
+    s += `<line x1="0" y1="${v.H - t}" x2="${v.L}" y2="${v.H - t}" stroke="#1f5fa8" stroke-width="0.04" stroke-dasharray="0.25 0.15"/>`;
+  });
   placed.forEach(q => {
-    s += `<rect x="${q.x}" y="${v.H - q.z - q.h}" width="${q.ax}" height="${q.h}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${q.id} | z=${q.z.toFixed(2)} m</title></rect>`;
+    s += `<rect x="${q.x}" y="${v.H - q.z - q.h}" width="${q.ax}" height="${q.h}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${esc(q.id)} | z=${q.z.toFixed(2)} m</title></rect>`;
   });
   s += `<text x="${v.L / 2}" y="${v.H + 0.8}" text-anchor="middle" font-size="0.45">Boyuna kesit (yan görünüm)</text>`;
   return s + '</svg>';
@@ -104,27 +116,53 @@ function sectionSvg(v, placed) {
   return s + '</svg>';
 }
 
-function render(v, holds, pending, total) {
-  const placedAll = holds.reduce((s, h) => s + h.placed.length, 0);
-  const holdVol = v.L * (v.bB + v.bT) / 2 * v.H;
-  let html = `<div class="sum"><b>Toplam kalem:</b> ${total} &nbsp;|&nbsp; <b>Yerleşen:</b> ${placedAll} &nbsp;|&nbsp; <b>Yerleşmeyen:</b> ${pending.length}</div>`;
+function metricBoxes(m) {
+  return `<div class="metrics">
+    <div>Net hacim kullanımı<b>${pct(m.utilization)}</b></div>
+    <div>Dikey boşluk dahil kullanılan hacim<b>${pct(m.utilizationWithGaps)}</b></div>
+    <div>Dikey boşluk<b>${m.gapVol.toFixed(2)} m³ (${pct(m.gapShare)})</b></div>
+    <div>Katman doluluğu<b>${pct(m.layerFill)}</b></div>
+  </div>`;
+}
 
-  holds.forEach(h => {
+function render(v, res, total, warnings) {
+  const { holds, pending } = res;
+  const pm = planMetrics(v, res);
+  const placedAll = holds.reduce((s, h) => s + h.placed.length, 0);
+  let html = '';
+  if (warnings.length) {
+    html += `<div class="note"><b>Uyarılar</b><ul>${warnings.map(w => `<li>${esc(formatIssue(w))}</li>`).join('')}</ul></div>`;
+  }
+  html += `<div class="sum"><b>Toplam kalem:</b> ${total} &nbsp;|&nbsp; <b>Yerleşen:</b> ${placedAll} &nbsp;|&nbsp; <b>Yerleşmeyen:</b> ${pending.length}</div>`;
+  html += metricBoxes(pm);
+  html += `<div class="cap">Net hacim kullanımı = yük hacmi / hold hacmi. Dikey boşluk = her katmanda, kalemin (ya da üst üste konan aynı tabanlı kalemlerin) üstü ile katman tavanı arasında kalan boş yükseklik x taban alanı; bu hacim katman tarafından tüketilir ama yük taşımaz. Katman doluluğu = yük hacmi / (yük + dikey boşluk).`;
+  if (res.strategy) html += ` Seçilen yöntem: ${esc(res.strategy.order)} / ${esc(res.strategy.strategy)}, yerel arama iyileştirmesi: ${res.strategy.localSearchImprovements}.`;
+  html += `</div>`;
+
+  holds.forEach((h, k) => {
+    const m = pm.holds[k];
     const wt = h.placed.reduce((s, q) => s + q.wt, 0);
-    const vol = h.placed.reduce((s, q) => s + q.ax * q.by * q.h, 0);
     html += `<div class="hold"><h3>Hold ${h.hi + 1}</h3>
-      <div class="cap">Yerleşen: ${h.placed.length} kalem | Ağırlık: ${wt.toFixed(2)} t | Hacim kullanımı: %${(100 * vol / holdVol).toFixed(1)}</div>`;
+      <div class="cap">Yerleşen: ${h.placed.length} kalem | Ağırlık: ${wt.toFixed(2)} t | Yük hacmi: ${m.cargoVol.toFixed(2)} / ${m.holdVol.toFixed(2)} m³ | En büyük dikey boşluk: ${m.maxGap.toFixed(2)} m | Üst katman üstü boş yükseklik: ${m.headroom.toFixed(2)} m</div>`;
+    html += metricBoxes(m);
+    if (m.layers.length) {
+      html += `<table><tr><th>Katman</th><th>z (m)</th><th>Yükseklik (m)</th><th>Kalem</th><th>Yük hacmi (m³)</th><th>Dikey boşluk (m³)</th><th>En büyük boşluk (m)</th></tr>`;
+      m.layers.forEach((L, i) => {
+        html += `<tr><td>${i + 1}</td><td>${L.z.toFixed(2)}</td><td>${L.h.toFixed(2)}</td><td>${L.items}</td><td>${L.cargoVol.toFixed(2)}</td><td>${L.gapVol.toFixed(2)}</td><td>${L.maxGap.toFixed(2)}</td></tr>`;
+      });
+      html += `</table>`;
+    }
     if (h.placed.length) {
       const rows = [...h.placed].sort((a, b) => a.z - b.z || a.x - b.x);
-      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th></tr>`;
+      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Katman yük. (m)</th></tr>`;
       rows.forEach(q => {
-        html += `<tr><td>${q.id}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td></tr>`;
+        html += `<tr><td>${esc(q.id)}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td><td>${q.layerH}</td></tr>`;
       });
       html += `</table>`;
     }
     html += `<div class="drawings">
       <div><div class="cap">Üst görünüm</div>${topSvg(v, h.placed)}</div>
-      <div><div class="cap">Boyuna kesit</div>${elevSvg(v, h.placed)}</div>
+      <div><div class="cap">Boyuna kesit (kesikli çizgi: katman tavanı)</div>${elevSvg(v, h.placed)}</div>
       <div><div class="cap">Enine kesit (daralma)</div>${sectionSvg(v, h.placed)}</div>
     </div></div>`;
   });
@@ -132,31 +170,46 @@ function render(v, holds, pending, total) {
   if (pending.length) {
     html += `<h3>Yerleşmeyen yükler</h3><table><tr><th>Kalem</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Kısıt</th></tr>`;
     pending.forEach(q => {
-      html += `<tr><td>${q.id}</td><td>${q.l} x ${q.w} x ${q.h}</td><td>${q.wt}</td><td>${q.restr || '-'}</td></tr>`;
+      html += `<tr><td>${esc(q.id)}</td><td>${q.l} x ${q.w} x ${q.h}</td><td>${q.wt}</td><td>${esc(q.restr || '-')}</td></tr>`;
     });
     html += `</table>`;
   }
   $('out').innerHTML = html;
 }
 
+function showErrors(title, list) {
+  $('out').innerHTML = `<div class="err"><b>${esc(title)}</b> Plan oluşturulmadı; aşağıdakileri düzeltip tekrar dene.<ul>${list.map(e => `<li>${esc(e)}</li>`).join('')}</ul></div>`;
+}
+
+// Empty or invalid number fields become NaN (not 0), so validateVessel reports them.
+const num = id => { const s = $(id).value.trim(); return s === '' ? NaN : Number(s); };
+
 function readVessel() {
-  return { n: +$('n').value, L: +$('L').value, bB: +$('bB').value, bT: +$('bT').value, H: +$('H').value };
+  return { n: num('n'), L: num('L'), bB: num('bB'), bT: num('bT'), H: num('H') };
 }
 
 function plan() {
+  lastPlan = null;
   const v = readVessel();
-  const maxT = +$('mt').value;
-  const items = parseCargo($('cargo').value);
-  const res = planBest(v, items, maxT);
+  const maxT = num('mt');
+  const vErr = validateVessel(v, maxT);
+  if (vErr.length) { showErrors('Gemi bilgilerinde hata var.', vErr); return false; }
+  const parsed = parseCargoChecked($('cargo').value, { holds: v.n });
+  if (parsed.errors.length) {
+    showErrors(`Yük listesinde ${parsed.errors.length} hata var.`, parsed.errors.map(formatIssue));
+    return false;
+  }
+  const res = planBest(v, parsed.items, maxT);
   lastPlan = { v, ...res };
-  render(v, res.holds, res.pending, items.length);
+  render(v, res, parsed.items.length, parsed.warnings);
+  return true;
 }
 
 function downloadCsv() {
-  if (!lastPlan) plan();
-  let csv = 'hold,kalem,x_m,y_m,z_m,uzunluk_m,genislik_m,yukseklik_m,agirlik_t\n';
+  if (!lastPlan && !plan()) return;
+  let csv = 'hold,kalem,x_m,y_m,z_m,uzunluk_m,genislik_m,yukseklik_m,agirlik_t,katman_z_m,katman_yuksekligi_m\n';
   lastPlan.holds.forEach(h => h.placed.forEach(q => {
-    csv += [q.hold, `"${q.id}"`, q.x.toFixed(2), q.y.toFixed(2), q.z.toFixed(2), q.ax, q.by, q.h, q.wt].join(',') + '\n';
+    csv += [q.hold, `"${q.id}"`, q.x.toFixed(2), q.y.toFixed(2), q.z.toFixed(2), q.ax, q.by, q.h, q.wt, q.layerZ.toFixed(2), q.layerH].join(',') + '\n';
   }));
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -165,7 +218,8 @@ function downloadCsv() {
   a.click();
 }
 
-$('run').onclick = plan;
+$('run').onclick = () => plan();
+['cargo', 'n', 'L', 'bB', 'bT', 'H', 'mt'].forEach(id => { $(id).oninput = () => { lastPlan = null; }; });
 $('csv').onclick = downloadCsv;
 plan();
 </script>

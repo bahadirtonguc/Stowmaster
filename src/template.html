@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stowage Planlayıcı - Prototip v2</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:16px;color:#222;max-width:1100px;font-size:14px}
+h1{font-size:20px;margin:0 0 8px}
+h3{margin:18px 0 6px;font-size:16px}
+.warn{background:#fff4e5;border:1px solid #f0c36d;padding:8px 12px;border-radius:6px;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+label{font-size:12px;display:flex;flex-direction:column;gap:3px}
+input,textarea{font:13px monospace;padding:5px;border:1px solid #bbb;border-radius:4px}
+textarea{width:100%;height:190px;box-sizing:border-box}
+button{padding:7px 14px;margin:8px 8px 8px 0;border:0;border-radius:6px;background:#1f5fa8;color:#fff;cursor:pointer}
+table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px}
+th,td{border:1px solid #ddd;padding:4px 6px;text-align:left}
+th{background:#f3f5f8}
+.hold{margin-top:22px;border-top:2px solid #1f5fa8;padding-top:8px}
+.drawings{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px}
+.drawings svg{width:100%;height:auto;background:#fafbfd;border:1px solid #ddd;border-radius:4px}
+.cap{font-size:12px;color:#555;margin:2px 0 6px}
+.sum{font-size:14px;margin:10px 0}
+</style>
+</head>
+<body>
+<h1>Stowage planlayıcı (prototip v2)</h1>
+<p class="warn">Örnek gemi ve örnek yük listesiyle çalışıyor. Gerçek hold ebatlarını, taban ve üst genişlikleri, maksimum yükleri geminin stabilite kitabı ve kapasite planından gir. Yerleşim sezgisel bir yöntemdir ve en iyi planı garanti etmez. Stabilite ve dayanım kontrolü yapılmaz. Çıkan plan resmi stowage planı değildir; operasyon için sınıf onaylı loading computer gerekir.</p>
+
+<h3>Gemi (hold) bilgileri</h3>
+<div class="grid">
+  <label>Hold sayısı<input id="n" type="number" value="3" min="1" max="8"></label>
+  <label>Hold boyu L (m)<input id="L" type="number" value="24" step="0.1"></label>
+  <label>Taban genişliği (m)<input id="bB" type="number" value="16" step="0.1"></label>
+  <label>Üst genişlik (m)<input id="bT" type="number" value="13" step="0.1"></label>
+  <label>Hold yüksekliği H (m)<input id="H" type="number" value="12" step="0.1"></label>
+  <label>Hold başına max yük (t)<input id="mt" type="number" value="350" step="1"></label>
+</div>
+
+<h3>Yük listesi (packing list)</h3>
+<p style="font-size:12px;margin:0 0 6px">Format: ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t), adet, öncelik (1 önce), istiflenebilir (yes/no), kısıt (boş ya da H1, H2 ... ile tek hold)</p>
+<textarea id="cargo"></textarea>
+<br>
+<button id="run">Planı oluştur</button><button id="csv">Yükleme listesini CSV indir</button>
+
+<div id="out"></div>
+
+<script>
+/*PLANNER*/
+
+const $ = id => document.getElementById(id);
+let lastPlan = null;
+
+$('cargo').value = `ad,uzunluk,genislik,yukseklik,agirlik,adet,oncelik,istiflenebilir,kisit
+Kutu A,1.2,0.8,0.8,0.6,20,2,yes,
+Palet B,1.2,1.0,1.1,0.9,15,2,yes,
+Makine C,2.5,1.2,1.4,4.0,4,1,no,
+Celik bobin,2.0,2.0,1.5,8.0,4,3,no,
+Ozel yuk D,1.0,1.0,1.0,1.0,6,1,yes,H3`;
+
+function color(name) {
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
+  return `hsl(${h},60%,68%)`;
+}
+
+// Top view: outlines centred on the hold centreline, items drawn with the same y offset
+function topSvg(v, placed) {
+  const W = Math.max(v.bB, v.bT), p = 1, c = W / 2;
+  let s = `<svg viewBox="${-p} ${-p} ${v.L + 2 * p} ${W + 2 * p}">`;
+  s += `<rect x="0" y="${c - v.bB / 2}" width="${v.L}" height="${v.bB}" fill="none" stroke="#999" stroke-dasharray="0.3 0.2" stroke-width="0.05"/>`;
+  s += `<rect x="0" y="${c - v.bT / 2}" width="${v.L}" height="${v.bT}" fill="none" stroke="#333" stroke-width="0.06"/>`;
+  placed.forEach(q => {
+    s += `<rect x="${q.x}" y="${q.y + c}" width="${q.ax}" height="${q.by}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${q.id} | z=${q.z.toFixed(2)} m</title></rect>`;
+  });
+  s += `<text x="${v.L / 2}" y="${W + 0.8}" text-anchor="middle" font-size="0.45">L = ${v.L} m (üst görünüm)</text>`;
+  return s + '</svg>';
+}
+
+function elevSvg(v, placed) {
+  const p = 1;
+  let s = `<svg viewBox="${-p} ${-p} ${v.L + 2 * p} ${v.H + 2 * p}">`;
+  s += `<rect x="0" y="0" width="${v.L}" height="${v.H}" fill="none" stroke="#333" stroke-width="0.06"/>`;
+  placed.forEach(q => {
+    s += `<rect x="${q.x}" y="${v.H - q.z - q.h}" width="${q.ax}" height="${q.h}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${q.id} | z=${q.z.toFixed(2)} m</title></rect>`;
+  });
+  s += `<text x="${v.L / 2}" y="${v.H + 0.8}" text-anchor="middle" font-size="0.45">Boyuna kesit (yan görünüm)</text>`;
+  return s + '</svg>';
+}
+
+function sectionSvg(v, placed) {
+  const p = 1.2;
+  const zs = [...new Set(placed.map(q => +q.z.toFixed(2)))].sort((a, b) => a - b);
+  let s = `<svg viewBox="${-v.bB / 2 - p} ${-p} ${v.bB + 2 * p} ${v.H + 2 * p}">`;
+  s += `<polygon points="${-v.bB / 2},${v.H} ${v.bB / 2},${v.H} ${v.bT / 2},0 ${-v.bT / 2},0" fill="none" stroke="#333" stroke-width="0.08"/>`;
+  zs.forEach(z => {
+    const w = widthAt(v, z);
+    s += `<line x1="${-w / 2}" y1="${v.H - z}" x2="${w / 2}" y2="${v.H - z}" stroke="#1f5fa8" stroke-width="0.05" stroke-dasharray="0.25 0.15"/>`;
+  });
+  s += `<text x="0" y="${v.H + 0.9}" text-anchor="middle" font-size="0.45">Taban ${v.bB} m</text>`;
+  s += `<text x="0" y="-0.4" text-anchor="middle" font-size="0.45">Üst ${v.bT} m</text>`;
+  s += `<text x="${v.bB / 2 + 0.2}" y="${v.H / 2}" font-size="0.45">H ${v.H} m</text>`;
+  return s + '</svg>';
+}
+
+function render(v, holds, pending, total) {
+  const placedAll = holds.reduce((s, h) => s + h.placed.length, 0);
+  const holdVol = v.L * (v.bB + v.bT) / 2 * v.H;
+  let html = `<div class="sum"><b>Toplam kalem:</b> ${total} &nbsp;|&nbsp; <b>Yerleşen:</b> ${placedAll} &nbsp;|&nbsp; <b>Yerleşmeyen:</b> ${pending.length}</div>`;
+
+  holds.forEach(h => {
+    const wt = h.placed.reduce((s, q) => s + q.wt, 0);
+    const vol = h.placed.reduce((s, q) => s + q.ax * q.by * q.h, 0);
+    html += `<div class="hold"><h3>Hold ${h.hi + 1}</h3>
+      <div class="cap">Yerleşen: ${h.placed.length} kalem | Ağırlık: ${wt.toFixed(2)} t | Hacim kullanımı: %${(100 * vol / holdVol).toFixed(1)}</div>`;
+    if (h.placed.length) {
+      const rows = [...h.placed].sort((a, b) => a.z - b.z || a.x - b.x);
+      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th></tr>`;
+      rows.forEach(q => {
+        html += `<tr><td>${q.id}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td></tr>`;
+      });
+      html += `</table>`;
+    }
+    html += `<div class="drawings">
+      <div><div class="cap">Üst görünüm</div>${topSvg(v, h.placed)}</div>
+      <div><div class="cap">Boyuna kesit</div>${elevSvg(v, h.placed)}</div>
+      <div><div class="cap">Enine kesit (daralma)</div>${sectionSvg(v, h.placed)}</div>
+    </div></div>`;
+  });
+
+  if (pending.length) {
+    html += `<h3>Yerleşmeyen yükler</h3><table><tr><th>Kalem</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Kısıt</th></tr>`;
+    pending.forEach(q => {
+      html += `<tr><td>${q.id}</td><td>${q.l} x ${q.w} x ${q.h}</td><td>${q.wt}</td><td>${q.restr || '-'}</td></tr>`;
+    });
+    html += `</table>`;
+  }
+  $('out').innerHTML = html;
+}
+
+function readVessel() {
+  return { n: +$('n').value, L: +$('L').value, bB: +$('bB').value, bT: +$('bT').value, H: +$('H').value };
+}
+
+function plan() {
+  const v = readVessel();
+  const maxT = +$('mt').value;
+  const items = parseCargo($('cargo').value);
+  const res = planBest(v, items, maxT);
+  lastPlan = { v, ...res };
+  render(v, res.holds, res.pending, items.length);
+}
+
+function downloadCsv() {
+  if (!lastPlan) plan();
+  let csv = 'hold,kalem,x_m,y_m,z_m,uzunluk_m,genislik_m,yukseklik_m,agirlik_t\n';
+  lastPlan.holds.forEach(h => h.placed.forEach(q => {
+    csv += [q.hold, `"${q.id}"`, q.x.toFixed(2), q.y.toFixed(2), q.z.toFixed(2), q.ax, q.by, q.h, q.wt].join(',') + '\n';
+  }));
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'yukleme_listesi.csv';
+  a.click();
+}
+
+$('run').onclick = plan;
+$('csv').onclick = downloadCsv;
+plan();
+</script>
+</body>
+</html>

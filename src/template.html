@@ -28,6 +28,8 @@ th{background:#f3f5f8}
 .metrics{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:6px;margin:6px 0}
 .metrics div{background:#f3f5f8;border-radius:4px;padding:5px 8px;font-size:12px}
 .metrics b{display:block;font-size:14px}
+.rules{display:flex;flex-wrap:wrap;gap:6px 18px;margin:10px 0 0;font-size:13px}
+.rules label{flex-direction:row;align-items:center;gap:6px;font-size:13px}
 @media (max-width:700px){.grid{grid-template-columns:1fr 1fr}.drawings{grid-template-columns:1fr}}
 </style>
 </head>
@@ -43,10 +45,18 @@ th{background:#f3f5f8}
   <label>Üst genişlik (m)<input id="bT" type="number" value="13" step="0.1"></label>
   <label>Hold yüksekliği H (m)<input id="H" type="number" value="12" step="0.1"></label>
   <label>Hold başına max yük (t)<input id="mt" type="number" value="350" step="1"></label>
+  <label>Taban yük sınırı (t/m², boş = yok)<input id="fl" type="number" value="" step="0.1" min="0"></label>
 </div>
+<div class="rules">
+  <b>Ağırlık yerleşimi:</b>
+  <label><input type="checkbox" id="rHolds" checked> Hold'lar arası denge</label>
+  <label><input type="checkbox" id="rPS" checked> İskele/sancak dengesi</label>
+  <label><input type="checkbox" id="rHeavy" checked> Ağır alta, hafif üste</label>
+</div>
+<p class="cap">Bunlar yalnızca yerleşim kurallarıdır. Stabilite, trim ve gövde dayanımı hesaplanmaz. Taban yük sınırı, her kalemin ağırlığının kendi taban alanından dikey olarak tabana indiği basit bir varsayımla kontrol edilir.</p>
 
 <h3>Yük listesi (packing list)</h3>
-<p style="font-size:12px;margin:0 0 6px">Format: ilk satır başlık; sonra ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t) zorunlu; adet (boşsa 1), öncelik (1 önce, boşsa 9), istiflenebilir (yes/no, boşsa yes), kısıt (boş ya da H1, H2 ... ile tek hold) isteğe bağlı. Ondalık ayırıcı nokta. Hatalı satır varsa plan oluşturulmaz, hatalar satır numarasıyla listelenir. Aşağıdaki liste örnektir.</p>
+<p style="font-size:12px;margin:0 0 6px">Format: ilk satır başlık; sonra ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t) zorunlu; adet (boşsa 1), öncelik (1 önce, boşsa 9), istiflenebilir (yes/no, boşsa yes), kısıt (boş ya da H1, H2 ... ile tek hold), üst yük (ust_yuk: kalemin üstüne konabilecek en fazla ağırlık, t; boşsa sınır yok) isteğe bağlı. Ondalık ayırıcı nokta. Hatalı satır varsa plan oluşturulmaz, hatalar satır numarasıyla listelenir. Aşağıdaki liste örnektir.</p>
 <textarea id="cargo"></textarea>
 <br>
 <button id="run">Planı oluştur</button><button id="csv">Yükleme listesini CSV indir</button>
@@ -125,6 +135,21 @@ function metricBoxes(m) {
   </div>`;
 }
 
+// Weight layout figures (layout only, not stability)
+function weightBoxes(m, plan) {
+  let s = `<div class="metrics">`;
+  if (plan) {
+    s += `<div>Toplam ağırlık<b>${m.weight.toFixed(1)} t</b></div>
+      <div>Hold'lar arası ağırlık farkı (en ağır - en hafif)<b>${m.holdWeightSpread.toFixed(1)} t</b></div>`;
+  } else {
+    s += `<div>Ağırlık<b>${m.weight.toFixed(1)} t</b></div>
+      <div>İskele / sancak<b>${m.portWeight.toFixed(1)} / ${m.stbdWeight.toFixed(1)} t</b></div>
+      <div>Yük ağırlık merkezinin orta hattan kaçıklığı<b>${Math.abs(m.centroidY).toFixed(2)} m ${m.centroidY > 1e-6 ? 'sancak' : m.centroidY < -1e-6 ? 'iskele' : ''}</b></div>`;
+  }
+  s += `<div>En yüksek taban basıncı<b>${m.maxFloorPressure.toFixed(2)} t/m²</b></div></div>`;
+  return s;
+}
+
 function render(v, res, total, warnings) {
   const { holds, pending } = res;
   const pm = planMetrics(v, res);
@@ -135,6 +160,7 @@ function render(v, res, total, warnings) {
   }
   html += `<div class="sum"><b>Toplam kalem:</b> ${total} &nbsp;|&nbsp; <b>Yerleşen:</b> ${placedAll} &nbsp;|&nbsp; <b>Yerleşmeyen:</b> ${pending.length}</div>`;
   html += metricBoxes(pm);
+  html += weightBoxes(pm, true);
   html += `<div class="cap">Net hacim kullanımı = yük hacmi / hold hacmi. Dikey boşluk = her katmanda, kalemin (ya da üst üste konan aynı tabanlı kalemlerin) üstü ile katman tavanı arasında kalan boş yükseklik x taban alanı; bu hacim katman tarafından tüketilir ama yük taşımaz. Katman doluluğu = yük hacmi / (yük + dikey boşluk).`;
   if (res.strategy) html += ` Seçilen yöntem: ${esc(res.strategy.order)} / ${esc(res.strategy.strategy)}, yerel arama iyileştirmesi: ${res.strategy.localSearchImprovements}.`;
   html += `</div>`;
@@ -145,6 +171,7 @@ function render(v, res, total, warnings) {
     html += `<div class="hold"><h3>Hold ${h.hi + 1}</h3>
       <div class="cap">Yerleşen: ${h.placed.length} kalem | Ağırlık: ${wt.toFixed(2)} t | Yük hacmi: ${m.cargoVol.toFixed(2)} / ${m.holdVol.toFixed(2)} m³ | En büyük dikey boşluk: ${m.maxGap.toFixed(2)} m | Üst katman üstü boş yükseklik: ${m.headroom.toFixed(2)} m</div>`;
     html += metricBoxes(m);
+    html += weightBoxes(m, false);
     if (m.layers.length) {
       html += `<table><tr><th>Katman</th><th>z (m)</th><th>Yükseklik (m)</th><th>Kalem</th><th>Yük hacmi (m³)</th><th>Dikey boşluk (m³)</th><th>En büyük boşluk (m)</th></tr>`;
       m.layers.forEach((L, i) => {
@@ -154,9 +181,9 @@ function render(v, res, total, warnings) {
     }
     if (h.placed.length) {
       const rows = [...h.placed].sort((a, b) => a.z - b.z || a.x - b.x);
-      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Katman yük. (m)</th></tr>`;
+      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Katman yük. (m)</th><th>Üst yük sınırı (t)</th></tr>`;
       rows.forEach(q => {
-        html += `<tr><td>${esc(q.id)}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td><td>${q.layerH}</td></tr>`;
+        html += `<tr><td>${esc(q.id)}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td><td>${q.layerH}</td><td>${q.maxTop == null ? '-' : q.maxTop}</td></tr>`;
       });
       html += `</table>`;
     }
@@ -188,18 +215,29 @@ function readVessel() {
   return { n: num('n'), L: num('L'), bB: num('bB'), bT: num('bT'), H: num('H') };
 }
 
+function readRules() {
+  const fl = $('fl').value.trim();
+  return {
+    balanceHolds: $('rHolds').checked,
+    balancePortStbd: $('rPS').checked,
+    heavyBelow: $('rHeavy').checked,
+    floorLoad: fl === '' ? null : Number(fl)
+  };
+}
+
 function plan() {
   lastPlan = null;
   const v = readVessel();
   const maxT = num('mt');
-  const vErr = validateVessel(v, maxT);
+  const rules = readRules();
+  const vErr = validateVessel(v, maxT, rules);
   if (vErr.length) { showErrors('Gemi bilgilerinde hata var.', vErr); return false; }
   const parsed = parseCargoChecked($('cargo').value, { holds: v.n });
   if (parsed.errors.length) {
     showErrors(`Yük listesinde ${parsed.errors.length} hata var.`, parsed.errors.map(formatIssue));
     return false;
   }
-  const res = planBest(v, parsed.items, maxT);
+  const res = planBest(v, parsed.items, maxT, { rules });
   lastPlan = { v, ...res };
   render(v, res, parsed.items.length, parsed.warnings);
   return true;
@@ -219,7 +257,7 @@ function downloadCsv() {
 }
 
 $('run').onclick = () => plan();
-['cargo', 'n', 'L', 'bB', 'bT', 'H', 'mt'].forEach(id => { $(id).oninput = () => { lastPlan = null; }; });
+['cargo', 'n', 'L', 'bB', 'bT', 'H', 'mt', 'fl', 'rHolds', 'rPS', 'rHeavy'].forEach(id => { $(id).oninput = () => { lastPlan = null; }; });
 $('csv').onclick = downloadCsv;
 plan();
 </script>

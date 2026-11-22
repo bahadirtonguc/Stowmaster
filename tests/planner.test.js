@@ -21,7 +21,7 @@ function test(name, fn) {
 const volOf = res => res.holds.reduce((s, h) => s + h.placed.reduce((t, q) => t + q.ax * q.by * q.h, 0), 0);
 
 // Rules every plan must satisfy.
-function checkPlan(res, v, maxT, items) {
+function checkPlan(res, v, maxT, items, rules = {}) {
   const seen = new Set();
   res.holds.forEach(h => {
     const wt = h.placed.reduce((s, q) => s + q.wt, 0);
@@ -64,6 +64,27 @@ function checkPlan(res, v, maxT, items) {
     h.placed.filter(q => !q.stack).forEach(q => {
       assert(!h.placed.some(r => r.z > q.z + 1e-9), `item stacked on non-stackable ${q.id}`);
     });
+    // weight rules, checked independently of the planner's own check
+    const ov = (a, b) => {
+      const ox = Math.min(a.x + a.ax, b.x + b.ax) - Math.max(a.x, b.x);
+      const oy = Math.min(a.y + a.by, b.y + b.by) - Math.max(a.y, b.y);
+      return ox > 1e-9 && oy > 1e-9 ? ox * oy : 0;
+    };
+    h.placed.forEach(r => {
+      const above = h.placed.filter(q => q !== r && q.z >= r.z + r.h - 1e-6 && ov(q, r));
+      if (rules.heavyBelow) {
+        above.filter(q => Math.abs(r.z + r.h - q.z) < 1e-6 || Math.abs(r.layerZ + r.layerH - q.z) < 1e-6)
+          .forEach(q => assert(q.wt <= r.wt + 1e-9, `${q.id} (${q.wt} t) rests on lighter ${r.id} (${r.wt} t)`));
+      }
+      if (r.maxTop != null) {
+        const load = above.reduce((s, q) => s + q.wt * ov(q, r) / (q.ax * q.by), 0);
+        assert(load <= r.maxTop + 1e-6, `${r.id} carries ${load} t > ${r.maxTop} t`);
+      }
+    });
+    if (rules.floorLoad != null) {
+      const p = P.floorPressure(h.placed);
+      assert(p <= rules.floorLoad + 1e-6, `hold ${h.hi + 1} floor pressure ${p} > ${rules.floorLoad}`);
+    }
   });
   res.pending.forEach(q => assert(!seen.has(q.uid), `${q.id} both placed and pending`));
   if (items) assert.strictEqual(seen.size + res.pending.length, items.length, 'items lost or duplicated');
@@ -268,7 +289,7 @@ test('CSV: errors are reported with line and column', () => {
     'Adet,1,1,1,1,2.5,1,yes,',    // 6 qty not integer
     'Istif,1,1,1,1,1,1,belki,',   // 7 bad yes/no
     'Kisit,1,1,1,1,1,1,yes,X1',   // 8 bad restriction
-    'Fazla,1,1,1,1,1,1,yes,,x',   // 9 too many columns
+    'Fazla,1,1,1,1,1,1,yes,,,,,x', // 9 too many columns
     ',1,1,1,1,1,1,yes,',          // 10 empty name
     'Neg,1,1,1,-2,1,1,yes,',      // 11 negative weight
     'Bos,1,,1,1,1,1,yes,',        // 12 empty genislik
@@ -327,6 +348,133 @@ test('vessel validation', () => {
   assert.strictEqual(P.validateVessel({ ...v, H: -1 }, maxT).length, 1);
   assert.strictEqual(P.validateVessel({ ...v, n: 1.5 }, maxT).length, 1);
   assert.strictEqual(P.validateVessel(v, NaN).length, 1);
+});
+
+// ------------------------------------------------------------- weight rules
+
+const ALL_RULES = { balanceHolds: true, balancePortStbd: true, heavyBelow: true };
+
+test('hold balance spreads weight over the holds', () => {
+  // stackable cargo only: the original method fills hold 1 completely before hold 2
+  const items = P.parseCargo(`${HEADER}\nKutu A,1.2,0.8,0.8,0.6,200,2,yes,\nPalet B,1.2,1.0,1.1,0.9,150,2,yes,`);
+  const off = P.planBest(v, items, maxT, { iterations: 0 });
+  const on = P.planBest(v, items, maxT, { iterations: 0, rules: { balanceHolds: true } });
+  checkPlan(on, v, maxT, items, { balanceHolds: true });
+  const mOff = P.planMetrics(v, off), mOn = P.planMetrics(v, on);
+  assert.strictEqual(on.pending.length, 0);
+  assert(mOn.holdWeightSpread < mOff.holdWeightSpread / 2, `${mOn.holdWeightSpread} vs ${mOff.holdWeightSpread}`);
+  // all three holds used
+  assert(on.holds.every(h => h.placed.length > 0));
+  console.log(`hold balance: spread ${mOff.holdWeightSpread.toFixed(1)} t -> ${mOn.holdWeightSpread.toFixed(1)} t`);
+});
+
+test('port/starboard balance keeps the cargo centred', () => {
+  // half-full layers: original method puts everything to port
+  const hv = { n: 1, L: 6, bB: 6, bT: 6, H: 2 };
+  const items = P.parseCargo(`${HEADER}\nA,2,2,1,5,4,1,yes,`);
+  const off = P.planHold(hv, 0, items, 100, { layerMode: 'seed' });
+  const on = P.planHold(hv, 0, items, 100, { layerMode: 'seed', rules: { balancePortStbd: true } });
+  const cOff = P.weightMetrics(off).centroidY, cOn = P.weightMetrics(on).centroidY;
+  assert.strictEqual(on.length, off.length);
+  assert(Math.abs(cOn) < Math.abs(cOff), `${cOn} vs ${cOff}`);
+  checkPlan({ holds: [{ hi: 0, placed: on }], pending: [] }, hv, 100);
+});
+
+test('heavy items never rest on lighter ones', () => {
+  const hv = { n: 1, L: 2, bB: 2, bT: 2, H: 3 };
+  const txt = `${HEADER}\nHafif,2,2,1,1,1,1,yes,\nAgir,2,2,1,9,1,2,yes,`;
+  // list order puts the light item first: without the rule the heavy one goes on top
+  const off = P.planHold(hv, 0, P.parseCargo(txt), 100, { layerMode: 'seed' });
+  assert.strictEqual(off.length, 2);
+  assert(off.find(q => q.name === 'Agir').z > 0);
+  const on = P.planBest(hv, P.parseCargo(txt), 100, { rules: { heavyBelow: true } });
+  checkPlan(on, hv, 100, P.parseCargo(txt), { heavyBelow: true });
+  assert.strictEqual(on.pending.length, 0);
+  assert.strictEqual(on.holds[0].placed.find(q => q.name === 'Agir').z, 0);
+});
+
+test('max load on top of an item (ust_yuk)', () => {
+  const hv = { n: 1, L: 2, bB: 2, bT: 2, H: 3 };
+  const items = P.parseCargo(`${HEADER}\nKirilgan,2,2,1,5,1,1,yes,,0\nKutu,2,2,1,1,2,2,yes,`);
+  assert.strictEqual(items[0].maxTop, 0);
+  const res = P.planBest(hv, items, 100);
+  checkPlan(res, hv, 100, items);
+  const k = res.holds[0].placed.find(q => q.name === 'Kirilgan');
+  if (k) assert(!res.holds[0].placed.some(q => q.z > k.z + 1e-9 && q.x < k.x + k.ax && q.x + q.ax > k.x));
+  // limit 1.5 t: one 1 t box fits on top, two do not
+  const items2 = P.parseCargo(`${HEADER}\nKirilgan,2,2,1,5,1,1,yes,,1.5\nKutu,2,2,1,1,2,2,yes,`);
+  const placed = P.planHold(hv, 0, items2, 100, { layerMode: 'seed' });
+  checkPlan({ holds: [{ hi: 0, placed }], pending: [] }, hv, 100);
+  assert.strictEqual(placed.length, 2);
+});
+
+test('floor load limit (t/m2)', () => {
+  const hv = { n: 1, L: 4, bB: 4, bT: 4, H: 4 };
+  const items = P.parseCargo(`${HEADER}\nKutu,1,1,1,2,40,1,yes,\nBlok,1,1,1,9,1,1,yes,`);
+  const rules = { floorLoad: 5 };
+  const res = P.planBest(hv, items, 1000, { rules });
+  checkPlan(res, hv, 1000, items, rules);
+  assert(res.pending.some(q => q.name === 'Blok'), '9 t on 1 m2 exceeds 5 t/m2');
+  // two 2 t boxes per column at most (4 t/m2); a third would make 6 t/m2
+  const placedKutu = res.holds[0].placed.filter(q => q.name === 'Kutu').length;
+  assert.strictEqual(placedKutu, 32);
+  assert(P.planMetrics(hv, res).maxFloorPressure <= 5 + 1e-9);
+});
+
+test('floor pressure metric (brute force)', () => {
+  let seed = 3;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let t = 0; t < 30; t++) {
+    const recs = [];
+    for (let i = 0; i < 8; i++) recs.push({ x: rnd() * 5, y: rnd() * 5 - 2.5, ax: 0.3 + rnd() * 2, by: 0.3 + rnd() * 2, wt: rnd() * 10 });
+    let brute = 0;
+    for (let i = 0; i <= 400; i++) for (let j = 0; j <= 400; j++) {
+      const x = i * 7.5 / 400 + 1e-7, y = j * 7.5 / 400 - 2.5 + 1e-7;
+      let p = 0;
+      for (const r of recs) if (x > r.x && x < r.x + r.ax && y > r.y && y < r.y + r.by) p += r.wt / (r.ax * r.by);
+      brute = Math.max(brute, p);
+    }
+    const got = P.floorPressure(recs);
+    assert(got >= brute - 1e-9 && got <= brute * 1.0001 + 1e-9 || Math.abs(got - brute) < 1e-6, `${got} vs ${brute}`);
+  }
+});
+
+test('CSV: ust_yuk column', () => {
+  const r = P.parseCargoChecked(`${HEADER},ust_yuk\nA,1,1,1,1,1,1,yes,,abc\nB,1,1,1,1,1,1,yes,,-1\nC,1,1,1,1,1,1,yes,,`);
+  assert.strictEqual(r.errors.length, 2);
+  assert(r.errors.every(e => e.column === 'ust_yuk'));
+  assert.strictEqual(r.items[0].maxTop, null);
+});
+
+test('rules: random scenarios (300)', () => {
+  let seed = 21;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  let cOff = 0, cOn = 0, sOff = 0, sOn = 0;
+  for (let t = 0; t < 300; t++) {
+    const rows = [HEADER];
+    const nRows = 1 + Math.floor(rnd() * 8);
+    for (let i = 0; i < nRows; i++) {
+      rows.push([`X${i}`, (0.5 + rnd() * 2.5).toFixed(1), (0.5 + rnd() * 2).toFixed(1), (0.4 + rnd() * 1.6).toFixed(1),
+        (0.2 + rnd() * 8).toFixed(2), 1 + Math.floor(rnd() * 15), 1 + Math.floor(rnd() * 3),
+        rnd() < 0.2 ? 'no' : 'yes', '', rnd() < 0.2 ? (rnd() * 6).toFixed(1) : ''].join(','));
+    }
+    const vv = { n: 1 + Math.floor(rnd() * 3), L: 4 + rnd() * 10, bB: 3 + rnd() * 8, bT: 3 + rnd() * 6, H: 2 + rnd() * 6 };
+    if (rnd() < 0.8) vv.bT = Math.min(vv.bT, vv.bB);
+    const mt = 20 + rnd() * 200;
+    const rules = { ...ALL_RULES, floorLoad: rnd() < 0.5 ? 2 + rnd() * 8 : null };
+    const its = P.parseCargo(rows.join('\n'));
+    const off = P.planBest(vv, its, mt, { iterations: 0 });
+    const on = P.planBest(vv, its, mt, { iterations: 20, seed: t, rules });
+    checkPlan(on, vv, mt, its, rules);
+    const mOff = P.planMetrics(vv, off), mOn = P.planMetrics(vv, on);
+    for (const [m, k] of [[mOff, 'off'], [mOn, 'on']]) {
+      const c = m.holds.reduce((s, h) => s + Math.abs(h.centroidY) * h.weight, 0);
+      if (k === 'off') { cOff += c; sOff += m.holdWeightSpread; } else { cOn += c; sOn += m.holdWeightSpread; }
+    }
+  }
+  console.log(`rules: 300 cases ok | hold weight spread ${sOff.toFixed(0)} -> ${sOn.toFixed(0)} t | ` +
+    `transverse moment ${cOff.toFixed(0)} -> ${cOn.toFixed(0)} t·m`);
+  assert(sOn < sOff && cOn < cOff);
 });
 
 // ------------------------------------------------------------- random scenarios (fixed seed)

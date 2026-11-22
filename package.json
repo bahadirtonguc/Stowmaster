@@ -4,7 +4,7 @@
   "description": "Prototype cargo stowage planner for a tapered-hold vessel (not for operational use).",
   "private": true,
   "scripts": {
-    "test": "node tests/planner.test.js",
+    "test": "node tests/planner.test.js && node tests/drawing.test.js",
     "build": "node scripts/build.js"
   },
   "license": "UNLICENSED"

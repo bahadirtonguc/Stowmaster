@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Stowage Planlayıcı - Prototip v2</title>
+<title>Stowage Planlayıcı - Prototip v3</title>
 <style>
 body{font-family:system-ui,sans-serif;margin:16px;color:#222;max-width:1100px;font-size:14px}
 h1{font-size:20px;margin:0 0 8px}
@@ -30,11 +30,28 @@ th{background:#f3f5f8}
 .metrics b{display:block;font-size:14px}
 .rules{display:flex;flex-wrap:wrap;gap:6px 18px;margin:10px 0 0;font-size:13px}
 .rules label{flex-direction:row;align-items:center;gap:6px;font-size:13px}
-@media (max-width:700px){.grid{grid-template-columns:1fr 1fr}.drawings{grid-template-columns:1fr}}
+.dwg{display:grid;grid-template-columns:280px 1fr;gap:12px;align-items:start}
+.dwg-controls{display:flex;flex-direction:column;gap:8px}
+.dwg-controls select{font:13px system-ui;padding:5px;border:1px solid #bbb;border-radius:4px}
+.dwg-controls button{margin:0}
+button.sec{background:#e8eef7;color:#1f3f6a;border:1px solid #9fb6d6}
+button.sec.on{background:#1f5fa8;color:#fff}
+button.sec.done{border-color:#2e7d32}
+button:disabled{opacity:.5;cursor:default}
+.dwg-view{border:1px solid #ddd;border-radius:4px;background:#fff;min-height:120px;overflow:auto;max-height:640px}
+.dwg-view canvas{display:block;width:100%;height:auto;cursor:crosshair;touch-action:none}
+.dwg-empty{padding:30px;color:#777;font-size:13px;text-align:center}
+.previews{display:flex;flex-wrap:wrap;gap:10px;margin-top:8px;align-items:flex-start}
+.previews figure{margin:0;font-size:11px;color:#555}
+.previews canvas{border:1px solid #ddd;background:#fafbfd;display:block}
+.shape-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+.shape-list div{border:1px solid #c9d2de;border-radius:4px;padding:6px 8px;font-size:12px;background:#f8fafc}
+.shape-list button{padding:2px 8px;margin:4px 0 0;font-size:11px;background:#a33}
+@media (max-width:700px){.grid{grid-template-columns:1fr 1fr}.drawings{grid-template-columns:1fr}.dwg{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
-<h1>Stowage planlayıcı (prototip v2)</h1>
+<h1>Stowage planlayıcı (prototip v3)</h1>
 <p class="warn">Örnek gemi ve örnek yük listesiyle çalışıyor. Gerçek hold ebatlarını, taban ve üst genişlikleri, maksimum yükleri geminin stabilite kitabı ve kapasite planından gir. Yerleşim sezgisel bir yöntemdir ve en iyi planı garanti etmez. Stabilite ve dayanım kontrolü yapılmaz. Çıkan plan resmi stowage planı değildir; operasyon için sınıf onaylı loading computer gerekir.</p>
 
 <h3>Gemi (hold) bilgileri</h3>
@@ -56,8 +73,31 @@ th{background:#f3f5f8}
 <p class="cap">Bunlar yalnızca yerleşim kurallarıdır. Stabilite, trim ve gövde dayanımı hesaplanmaz. Taban yük sınırı, her kalemin ağırlığının kendi taban alanından dikey olarak tabana indiği basit bir varsayımla kontrol edilir.</p>
 
 <h3>Yük listesi (packing list)</h3>
-<p style="font-size:12px;margin:0 0 6px">Format: ilk satır başlık; sonra ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t) zorunlu; adet (boşsa 1), öncelik (1 önce, boşsa 9), istiflenebilir (yes/no, boşsa yes), kısıt (boş ya da H1, H2 ... ile tek hold), üst yük (ust_yuk: kalemin üstüne konabilecek en fazla ağırlık, t; boşsa sınır yok) isteğe bağlı. Ondalık ayırıcı nokta. Hatalı satır varsa plan oluşturulmaz, hatalar satır numarasıyla listelenir. Aşağıdaki liste örnektir.</p>
+<p style="font-size:12px;margin:0 0 6px">Format: ilk satır başlık; sonra ad, uzunluk(m), genişlik(m), yükseklik(m), ağırlık(t) zorunlu; adet (boşsa 1), öncelik (1 önce, boşsa 9), istiflenebilir (yes/no, boşsa yes), kısıt (boş ya da H1, H2 ... ile tek hold), üst yük (ust_yuk: kalemin üstüne konabilecek en fazla ağırlık, t; boşsa sınır yok), şekil (sekil: kutu, silindir ya da cizim; boşsa kutu), yatış (yatis: silindirde zorunlu, dik / boyuna / enine) isteğe bağlı. Silindirde uzunluk eksen boyu, genişlik ve yükseklik çaptır. Ondalık ayırıcı nokta. Hatalı satır varsa plan oluşturulmaz, hatalar satır numarasıyla listelenir. Aşağıdaki liste örnektir.</p>
 <textarea id="cargo"></textarea>
+
+<h3>Çizimler (dikdörtgen olmayan kalemler)</h3>
+<p class="cap">Yük listesinde sekil=cizim olan kalemler için teknik çizimi (PDF ya da görsel) yükle, sonra üst ve yan görünüşü fareyle dikdörtgen içine al. Üst görünüşte boy yatay, genişlik dikey; yan görünüşte boy yatay, yükseklik yukarı olmalı (değilse döndür). Ölçüler yük listesinden alınır, çizimden yalnızca şekil okunur. Çıkan 3B şekil iki görünüşe de uyan en büyük hacimdir; gerçek parçadan küçük olmaz, girinti ve delikleri olduğundan dolu gösterebilir. Yerleşimde kalem yine dış kutusuyla (uzunluk × genişlik × yükseklik) yer kaplar.</p>
+<div class="dwg">
+  <div class="dwg-controls">
+    <label>Çizim dosyası (PDF, PNG, JPG)<input type="file" id="dwgFile" accept="application/pdf,image/png,image/jpeg,image/webp"></label>
+    <label>PDF sayfası<input type="number" id="dwgPage" value="1" min="1" step="1"></label>
+    <button id="dwgSample" class="sec">Örnek çizimi aç</button>
+    <label>Kalem (yük listesinde sekil=cizim)<select id="dwgItem"></select></label>
+    <button id="selTop" class="sec" disabled>1. Üst görünüşü seç</button>
+    <button id="selSide" class="sec" disabled>2. Yan görünüşü seç</button>
+    <div style="display:flex;gap:6px"><button id="rotTop" class="sec" disabled>Üst ↻</button><button id="rotSide" class="sec" disabled>Yan ↻</button></div>
+    <label><span>Koyuluk eşiği: <span id="dwgThrV">160</span></span><input type="range" id="dwgThr" min="60" max="240" value="160"></label>
+    <label>En ince kontur, px (0 = kapalı; ölçü çizgileri konturla kutu oluşturuyorsa artır)<input type="number" id="dwgStroke" value="0" min="0" max="30" step="1"></label>
+    <button id="dwgSave" disabled>Şekli bu kaleme kaydet</button>
+  </div>
+  <div>
+    <div class="dwg-view" id="dwgView"><div class="dwg-empty">Çizim yüklenmedi.</div></div>
+    <div id="dwgInfo" class="cap"></div>
+    <div class="previews" id="dwgPrev"></div>
+  </div>
+</div>
+<div class="shape-list" id="shapeList"></div>
 <br>
 <button id="run">Planı oluştur</button><button id="csv">Yükleme listesini CSV indir</button>
 
@@ -65,23 +105,82 @@ th{background:#f3f5f8}
 
 <script>
 /*PLANNER*/
+/*DRAWING*/
 
 const $ = id => document.getElementById(id);
 let lastPlan = null;
 const esc = s => String(s).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 const pct = x => '%' + (100 * x).toFixed(1);
 
-$('cargo').value = `ad,uzunluk,genislik,yukseklik,agirlik,adet,oncelik,istiflenebilir,kisit
-Kutu A,1.2,0.8,0.8,0.6,20,2,yes,
-Palet B,1.2,1.0,1.1,0.9,15,2,yes,
-Makine C,2.5,1.2,1.4,4.0,4,1,no,
-Celik bobin,2.0,2.0,1.5,8.0,4,3,no,
-Ozel yuk D,1.0,1.0,1.0,1.0,6,1,yes,H3`;
+const SAMPLE_CARGO = `ad,uzunluk,genislik,yukseklik,agirlik,adet,oncelik,istiflenebilir,kisit,ust_yuk,sekil,yatis
+Kutu A,1.2,0.8,0.8,0.6,20,2,yes,,,,
+Palet B,1.2,1.0,1.1,0.9,15,2,yes,,2,,
+Makine C,2.5,1.2,1.4,4.0,4,1,no,,,,
+Celik bobin,1.5,2.0,2.0,8.0,4,3,no,,,silindir,dik
+Boru,6.0,0.6,0.6,1.2,6,2,yes,,,silindir,boyuna
+Ozel yuk D,1.0,1.0,1.0,1.0,6,1,yes,H3,,,`;
+$('cargo').value = SAMPLE_CARGO;
+
+// Shapes from drawings, by item name; kept in this browser only.
+const SHAPE_KEY = 'stowage-planner.shapes.v1';
+let shapes = {};
+try { shapes = JSON.parse(localStorage.getItem(SHAPE_KEY) || '{}') || {}; } catch (e) { shapes = {}; }
+const saveShapes = () => { try { localStorage.setItem(SHAPE_KEY, JSON.stringify(shapes)); } catch (e) { /* storage blocked: shapes last until reload */ } };
 
 function color(name) {
   let h = 0;
   for (const ch of name) h = (h * 31 + ch.charCodeAt(0)) % 360;
   return `hsl(${h},60%,68%)`;
+}
+
+// SVG path of the filled cells of an nx x ny grid drawn into the box (x, y, w, h).
+// cell(i, j) -> filled; j = 0 is the top row of the box.
+function cellsPath(nx, ny, cell, x, y, w, h) {
+  const cw = w / nx, ch = h / ny;
+  let d = '';
+  for (let j = 0; j < ny; j++) {
+    let i = 0;
+    while (i < nx) {
+      if (!cell(i, j)) { i++; continue; }
+      const i0 = i;
+      while (i < nx && cell(i, j)) i++;
+      d += `M${(x + i0 * cw).toFixed(3)} ${(y + j * ch).toFixed(3)}h${((i - i0) * cw).toFixed(3)}v${ch.toFixed(3)}h${(-(i - i0) * cw).toFixed(3)}z`;
+    }
+  }
+  return d;
+}
+
+// One placed item in a view. view: 'top' (hold x-y, y down = starboard) or 'side' (hold x-z).
+// (x, y, w, h): the item's box in SVG coordinates.
+function itemShape(q, view, x, y, w, h) {
+  const fill = `fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"`;
+  const title = `<title>${esc(q.id)} | z=${q.z.toFixed(2)} m</title>`;
+  const sh = q.shape || { kind: 'box' };
+  const box = `<rect x="${x}" y="${y}" width="${w}" height="${h}" ${fill}>${title}</rect>`;
+  if (sh.kind === 'cyl') {
+    const round = (view === 'top' && sh.orient === 'dik') || (view === 'side' && sh.orient === 'enine');
+    if (round) return `<ellipse cx="${x + w / 2}" cy="${y + h / 2}" rx="${w / 2}" ry="${h / 2}" ${fill}>${title}</ellipse>`;
+    // otherwise a rectangle with the cylinder axis: horizontal for 'boyuna' in both views,
+    // vertical for 'enine' (top view) and 'dik' (side view)
+    const ax = sh.orient === 'boyuna'
+      ? `<line x1="${x}" y1="${y + h / 2}" x2="${x + w}" y2="${y + h / 2}" stroke="#222" stroke-width="0.02" stroke-dasharray="0.15 0.1"/>`
+      : `<line x1="${x + w / 2}" y1="${y}" x2="${x + w / 2}" y2="${y + h}" stroke="#222" stroke-width="0.02" stroke-dasharray="0.15 0.1"/>`;
+    return `<g>${box}${ax}</g>`;
+  }
+  if (sh.kind === 'hull') {
+    const n = sh.nx, views = hullViews(sh);
+    let cell;
+    if (view === 'top') {
+      cell = q.rot ? (i, j) => views.xy[j + n * i] : (i, j) => views.xy[i + n * j];
+    } else {
+      // side: row j = 0 is the top of the item (k = n-1)
+      const g = q.rot ? views.yz : views.xz;
+      cell = (i, j) => g[i + n * (n - 1 - j)];
+    }
+    const d = cellsPath(n, n, cell, x, y, w, h);
+    return `<g><rect x="${x}" y="${y}" width="${w}" height="${h}" fill="none" stroke="#888" stroke-width="0.02" stroke-dasharray="0.1 0.08"/><path d="${d}" ${fill.replace('stroke="#222"', 'stroke="none"')}>${title}</path></g>`;
+  }
+  return box;
 }
 
 // Top view: outlines centred on the hold centreline, items drawn with the same y offset
@@ -90,9 +189,7 @@ function topSvg(v, placed) {
   let s = `<svg viewBox="${-p} ${-p} ${v.L + 2 * p} ${W + 2 * p}">`;
   s += `<rect x="0" y="${c - v.bB / 2}" width="${v.L}" height="${v.bB}" fill="none" stroke="#999" stroke-dasharray="0.3 0.2" stroke-width="0.05"/>`;
   s += `<rect x="0" y="${c - v.bT / 2}" width="${v.L}" height="${v.bT}" fill="none" stroke="#333" stroke-width="0.06"/>`;
-  placed.forEach(q => {
-    s += `<rect x="${q.x}" y="${q.y + c}" width="${q.ax}" height="${q.by}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${esc(q.id)} | z=${q.z.toFixed(2)} m</title></rect>`;
-  });
+  [...placed].sort((a, b) => a.z - b.z).forEach(q => { s += itemShape(q, 'top', q.x, q.y + c, q.ax, q.by); });
   s += `<text x="${v.L / 2}" y="${W + 0.8}" text-anchor="middle" font-size="0.45">L = ${v.L} m (üst görünüm)</text>`;
   return s + '</svg>';
 }
@@ -104,9 +201,7 @@ function elevSvg(v, placed) {
   [...new Set(placed.map(q => q.layerZ + q.layerH))].forEach(t => {
     s += `<line x1="0" y1="${v.H - t}" x2="${v.L}" y2="${v.H - t}" stroke="#1f5fa8" stroke-width="0.04" stroke-dasharray="0.25 0.15"/>`;
   });
-  placed.forEach(q => {
-    s += `<rect x="${q.x}" y="${v.H - q.z - q.h}" width="${q.ax}" height="${q.h}" fill="${color(q.name)}" fill-opacity="0.75" stroke="#222" stroke-width="0.03"><title>${esc(q.id)} | z=${q.z.toFixed(2)} m</title></rect>`;
-  });
+  placed.forEach(q => { s += itemShape(q, 'side', q.x, v.H - q.z - q.h, q.ax, q.h); });
   s += `<text x="${v.L / 2}" y="${v.H + 0.8}" text-anchor="middle" font-size="0.45">Boyuna kesit (yan görünüm)</text>`;
   return s + '</svg>';
 }
@@ -132,10 +227,18 @@ function metricBoxes(m) {
     <div>Dikey boşluk dahil kullanılan hacim<b>${pct(m.utilizationWithGaps)}</b></div>
     <div>Dikey boşluk<b>${m.gapVol.toFixed(2)} m³ (${pct(m.gapShare)})</b></div>
     <div>Katman doluluğu<b>${pct(m.layerFill)}</b></div>
+    ${m.shapeLossVol > 1e-9 ? `<div>Silindir/çizim kutusu içindeki boşluk<b>${m.shapeLossVol.toFixed(2)} m³ (${pct(m.shapeLossShare)})</b></div>` : ''}
   </div>`;
 }
 
 // Weight layout figures (layout only, not stability)
+function shapeLabel(q) {
+  const sh = q.shape || { kind: 'box' };
+  if (sh.kind === 'cyl') return `silindir, ${sh.orient}`;
+  if (sh.kind === 'hull') return `çizim (kutunun %${(100 * sh.volFrac).toFixed(0)}'i)`;
+  return 'kutu';
+}
+
 function weightBoxes(m, plan) {
   let s = `<div class="metrics">`;
   if (plan) {
@@ -161,7 +264,7 @@ function render(v, res, total, warnings) {
   html += `<div class="sum"><b>Toplam kalem:</b> ${total} &nbsp;|&nbsp; <b>Yerleşen:</b> ${placedAll} &nbsp;|&nbsp; <b>Yerleşmeyen:</b> ${pending.length}</div>`;
   html += metricBoxes(pm);
   html += weightBoxes(pm, true);
-  html += `<div class="cap">Net hacim kullanımı = yük hacmi / hold hacmi. Dikey boşluk = her katmanda, kalemin (ya da üst üste konan aynı tabanlı kalemlerin) üstü ile katman tavanı arasında kalan boş yükseklik x taban alanı; bu hacim katman tarafından tüketilir ama yük taşımaz. Katman doluluğu = yük hacmi / (yük + dikey boşluk).`;
+  html += `<div class="cap">Net hacim kullanımı = yük hacmi / hold hacmi. Dikey boşluk = her katmanda, kalemin (ya da üst üste konan aynı tabanlı kalemlerin) üstü ile katman tavanı arasında kalan boş yükseklik x taban alanı; bu hacim katman tarafından tüketilir ama yük taşımaz. Katman doluluğu = yük hacmi / (yük + dikey boşluk). Silindir ve çizimli kalemler dış kutularıyla yer kaplar; kutu ile gerçek şekil arasındaki hacim ayrıca gösterilir.`;
   if (res.strategy) html += ` Seçilen yöntem: ${esc(res.strategy.order)} / ${esc(res.strategy.strategy)}, yerel arama iyileştirmesi: ${res.strategy.localSearchImprovements}.`;
   html += `</div>`;
 
@@ -181,9 +284,9 @@ function render(v, res, total, warnings) {
     }
     if (h.placed.length) {
       const rows = [...h.placed].sort((a, b) => a.z - b.z || a.x - b.x);
-      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Katman yük. (m)</th><th>Üst yük sınırı (t)</th></tr>`;
+      html += `<table><tr><th>Kalem</th><th>x (m)</th><th>y (m, merkez)</th><th>z (m)</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Katman yük. (m)</th><th>Üst yük sınırı (t)</th><th>Şekil</th></tr>`;
       rows.forEach(q => {
-        html += `<tr><td>${esc(q.id)}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td><td>${q.layerH}</td><td>${q.maxTop == null ? '-' : q.maxTop}</td></tr>`;
+        html += `<tr><td>${esc(q.id)}</td><td>${q.x.toFixed(2)}</td><td>${q.y.toFixed(2)}</td><td>${q.z.toFixed(2)}</td><td>${q.ax} x ${q.by} x ${q.h}</td><td>${q.wt}</td><td>${q.layerH}</td><td>${q.maxTop == null ? '-' : q.maxTop}</td><td>${shapeLabel(q)}</td></tr>`;
       });
       html += `</table>`;
     }
@@ -195,9 +298,9 @@ function render(v, res, total, warnings) {
   });
 
   if (pending.length) {
-    html += `<h3>Yerleşmeyen yükler</h3><table><tr><th>Kalem</th><th>Boyut (m)</th><th>Ağırlık (t)</th><th>Kısıt</th></tr>`;
+    html += `<h3>Yerleşmeyen yükler</h3><table><tr><th>Kalem</th><th>Dış kutu (m)</th><th>Ağırlık (t)</th><th>Kısıt</th><th>Şekil</th></tr>`;
     pending.forEach(q => {
-      html += `<tr><td>${esc(q.id)}</td><td>${q.l} x ${q.w} x ${q.h}</td><td>${q.wt}</td><td>${esc(q.restr || '-')}</td></tr>`;
+      html += `<tr><td>${esc(q.id)}</td><td>${q.l} x ${q.w} x ${q.h}</td><td>${q.wt}</td><td>${esc(q.restr || '-')}</td><td>${shapeLabel(q)}</td></tr>`;
     });
     html += `</table>`;
   }
@@ -232,9 +335,11 @@ function plan() {
   const rules = readRules();
   const vErr = validateVessel(v, maxT, rules);
   if (vErr.length) { showErrors('Gemi bilgilerinde hata var.', vErr); return false; }
-  const parsed = parseCargoChecked($('cargo').value, { holds: v.n });
+  const parsed = parseCargoChecked($('cargo').value, { holds: v.n, shapes });
   if (parsed.errors.length) {
-    showErrors(`Yük listesinde ${parsed.errors.length} hata var.`, parsed.errors.map(formatIssue));
+    const list = parsed.errors.map(formatIssue);
+    if (parsed.errors.some(e => /çizim yüklenmedi/.test(e.message))) list.push('Çizimi yukarıdaki "Çizimler" bölümünden yükleyip şekli kaydet.');
+    showErrors(`Yük listesinde ${parsed.errors.length} hata var.`, list);
     return false;
   }
   const res = planBest(v, parsed.items, maxT, { rules });
@@ -245,9 +350,9 @@ function plan() {
 
 function downloadCsv() {
   if (!lastPlan && !plan()) return;
-  let csv = 'hold,kalem,x_m,y_m,z_m,uzunluk_m,genislik_m,yukseklik_m,agirlik_t,katman_z_m,katman_yuksekligi_m\n';
+  let csv = 'hold,kalem,x_m,y_m,z_m,uzunluk_m,genislik_m,yukseklik_m,agirlik_t,katman_z_m,katman_yuksekligi_m,sekil\n';
   lastPlan.holds.forEach(h => h.placed.forEach(q => {
-    csv += [q.hold, `"${q.id}"`, q.x.toFixed(2), q.y.toFixed(2), q.z.toFixed(2), q.ax, q.by, q.h, q.wt, q.layerZ.toFixed(2), q.layerH].join(',') + '\n';
+    csv += [q.hold, `"${q.id}"`, q.x.toFixed(2), q.y.toFixed(2), q.z.toFixed(2), q.ax, q.by, q.h, q.wt, q.layerZ.toFixed(2), q.layerH, `"${shapeLabel(q)}"`].join(',') + '\n';
   }));
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
@@ -256,8 +361,422 @@ function downloadCsv() {
   a.click();
 }
 
+// ---------------------------------------------------------------- drawings (UI)
+
+// pdf.js is loaded only when a PDF is opened (needs internet); images work offline.
+const PDFJS = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
+const PDFJS_WORKER = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const GRID_N = 32;
+const MAX_PX = 2400;
+const VIEW_LABEL = { top: 'Üst görünüş', side: 'Yan görünüş' };
+const VIEW_COLOR = { top: [46, 125, 50], side: [31, 95, 168] };
+const dwg = { img: null, gray: null, W: 0, H: 0, label: '', mode: null, drag: null,
+  rect: { top: null, side: null }, sil: { top: null, side: null }, rot: { top: 0, side: 0 }, hull: null, grids: null };
+
+const dwgInfo = (html) => { $('dwgInfo').innerHTML = html; };
+
+function loadScript(src) {
+  return new Promise((res, rej) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = res;
+    el.onerror = () => rej(new Error('PDF okuyucu yüklenemedi'));
+    document.head.appendChild(el);
+  });
+}
+
+async function pdfLib() {
+  if (!window.pdfjsLib) await loadScript(PDFJS);
+  window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDFJS_WORKER;
+  return window.pdfjsLib;
+}
+
+function whiteCanvas(w, h) {
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(1, Math.round(w));
+  cv.height = Math.max(1, Math.round(h));
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, cv.width, cv.height);
+  return cv;
+}
+
+async function openFile(file) {
+  if (!file) return;
+  const isPdf = file.type === 'application/pdf' || /\.pdf$/i.test(file.name);
+  dwgInfo('Çizim açılıyor...');
+  try {
+    let cv, label;
+    if (isPdf) {
+      const lib = await pdfLib();
+      const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+      const pn = Math.min(Math.max(1, parseInt($('dwgPage').value, 10) || 1), doc.numPages);
+      $('dwgPage').max = doc.numPages;
+      $('dwgPage').value = pn;
+      const page = await doc.getPage(pn);
+      const v1 = page.getViewport({ scale: 1 });
+      const vp = page.getViewport({ scale: MAX_PX / Math.max(v1.width, v1.height) });
+      cv = whiteCanvas(vp.width, vp.height);
+      await page.render({ canvasContext: cv.getContext('2d'), viewport: vp }).promise;
+      label = `${file.name} (sayfa ${pn}/${doc.numPages})`;
+    } else {
+      const bmp = await createImageBitmap(file);
+      const k = Math.min(1, MAX_PX / Math.max(bmp.width, bmp.height));
+      cv = whiteCanvas(bmp.width * k, bmp.height * k);
+      cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+      label = file.name;
+    }
+    setDrawing(cv, label);
+  } catch (e) {
+    dwgInfo(`<span style="color:#a33">Çizim açılamadı: ${esc(e.message || e)}.` +
+      (isPdf ? ' PDF okuyucu internetten (cdnjs.cloudflare.com) yüklenir; bağlantı yoksa çizimi PNG ya da JPG olarak kaydedip yükle.' : '') + '</span>');
+  }
+}
+
+function setDrawing(cv, label) {
+  dwg.img = cv;
+  dwg.W = cv.width;
+  dwg.H = cv.height;
+  dwg.label = label;
+  dwg.gray = toGray(cv.getContext('2d').getImageData(0, 0, dwg.W, dwg.H).data, dwg.W, dwg.H);
+  dwg.rect = { top: null, side: null };
+  dwg.sil = { top: null, side: null };
+  dwg.rot = { top: 0, side: 0 };
+  dwg.hull = null;
+  const vc = document.createElement('canvas');
+  vc.id = 'dwgCanvas';
+  vc.width = dwg.W;
+  vc.height = dwg.H;
+  $('dwgView').innerHTML = '';
+  $('dwgView').appendChild(vc);
+  vc.addEventListener('pointerdown', onDown);
+  vc.addEventListener('pointermove', onMove);
+  vc.addEventListener('pointerup', onUp);
+  vc.addEventListener('pointercancel', () => { dwg.drag = null; redraw(); });
+  ['selTop', 'selSide', 'rotTop', 'rotSide'].forEach(id => { $(id).disabled = false; });
+  setMode('top');
+  updatePreview();
+  redraw();
+}
+
+function setMode(m) {
+  dwg.mode = m;
+  $('selTop').classList.toggle('on', m === 'top');
+  $('selSide').classList.toggle('on', m === 'side');
+}
+
+function toImage(ev) {
+  const r = ev.target.getBoundingClientRect();
+  return { x: (ev.clientX - r.left) * dwg.W / r.width, y: (ev.clientY - r.top) * dwg.H / r.height };
+}
+function onDown(ev) {
+  if (!dwg.mode) return;
+  ev.target.setPointerCapture(ev.pointerId);
+  const p = toImage(ev);
+  dwg.drag = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+}
+function onMove(ev) {
+  if (!dwg.drag) return;
+  const p = toImage(ev);
+  dwg.drag.x1 = p.x;
+  dwg.drag.y1 = p.y;
+  redraw();
+}
+function onUp(ev) {
+  if (!dwg.drag) return;
+  const d = dwg.drag;
+  dwg.drag = null;
+  const rect = { x: Math.min(d.x0, d.x1), y: Math.min(d.y0, d.y1), w: Math.abs(d.x1 - d.x0), h: Math.abs(d.y1 - d.y0) };
+  if (rect.w < 8 || rect.h < 8) { redraw(); return; }
+  selectView(dwg.mode, rect);
+  if (dwg.mode === 'top' && !dwg.rect.side) setMode('side');
+}
+
+function selectView(which, rect) {
+  dwg.rect[which] = rect;
+  extract(which);
+  updatePreview();
+  redraw();
+}
+
+function extract(which) {
+  const rect = dwg.rect[which];
+  if (!rect || !dwg.gray) { dwg.sil[which] = null; return; }
+  const s0 = extractSilhouette(dwg.gray, dwg.W, dwg.H, rect, {
+    threshold: +$('dwgThr').value, minStroke: Math.max(0, +$('dwgStroke').value || 0)
+  });
+  if (!s0) { dwg.sil[which] = null; return; }
+  let s = s0;
+  for (let k = 0; k < dwg.rot[which]; k++) s = rotateSilhouette(s);
+  dwg.sil[which] = { raw: s0, view: s };
+}
+
+function redraw() {
+  const vc = $('dwgCanvas');
+  if (!vc) return;
+  const ctx = vc.getContext('2d');
+  ctx.drawImage(dwg.img, 0, 0);
+  const lw = Math.max(2, dwg.W / 500);
+  for (const which of ['top', 'side']) {
+    const [r, g, b] = VIEW_COLOR[which];
+    const sil = dwg.sil[which];
+    if (sil) {
+      const s = sil.raw;
+      const tint = document.createElement('canvas');
+      tint.width = s.w;
+      tint.height = s.h;
+      const id = tint.getContext('2d').createImageData(s.w, s.h);
+      for (let k = 0; k < s.w * s.h; k++) {
+        if (!s.mask[k]) continue;
+        id.data[4 * k] = r; id.data[4 * k + 1] = g; id.data[4 * k + 2] = b; id.data[4 * k + 3] = 90;
+      }
+      tint.getContext('2d').putImageData(id, 0, 0);
+      ctx.drawImage(tint, s.bbox.x, s.bbox.y);
+    }
+    const rc = dwg.rect[which];
+    if (rc) {
+      ctx.strokeStyle = `rgb(${r},${g},${b})`;
+      ctx.lineWidth = lw;
+      ctx.setLineDash([]);
+      ctx.strokeRect(rc.x, rc.y, rc.w, rc.h);
+      ctx.fillStyle = `rgb(${r},${g},${b})`;
+      ctx.font = `${Math.round(lw * 8)}px system-ui`;
+      ctx.fillText(VIEW_LABEL[which], rc.x + lw * 2, rc.y - lw * 2);
+    }
+  }
+  if (dwg.drag) {
+    const d = dwg.drag;
+    ctx.strokeStyle = '#d32f2f';
+    ctx.lineWidth = lw;
+    ctx.setLineDash([lw * 4, lw * 3]);
+    ctx.strokeRect(Math.min(d.x0, d.x1), Math.min(d.y0, d.y1), Math.abs(d.x1 - d.x0), Math.abs(d.y1 - d.y0));
+    ctx.setLineDash([]);
+  }
+  $('selTop').classList.toggle('done', !!dwg.sil.top);
+  $('selSide').classList.toggle('done', !!dwg.sil.side);
+}
+
+// Raw rows of the cargo list that ask for a drawing: name -> {l, w, h}
+function drawingItems() {
+  const out = new Map();
+  $('cargo').value.split(/\r?\n/).slice(1).forEach(r => {
+    const c = r.split(',').map(x => x.trim());
+    if ((c[10] || '').toLowerCase() === 'cizim' && c[0] && !out.has(c[0])) out.set(c[0], { l: +c[1], w: +c[2], h: +c[3] });
+  });
+  return out;
+}
+
+function refreshItems() {
+  const sel = $('dwgItem'), prev = sel.value;
+  const items = drawingItems();
+  sel.innerHTML = items.size
+    ? [...items.keys()].map(n => `<option value="${esc(n)}">${esc(n)}${shapes[n] ? ' (şekli kayıtlı)' : ''}</option>`).join('')
+    : '<option value="">(listede sekil=cizim olan kalem yok)</option>';
+  if (items.has(prev)) sel.value = prev;
+  updatePreview();
+}
+
+function gridCanvas(grid, n, label, w, h) {
+  const size = 140, k = Math.min(size / w, size / h);
+  const cv = document.createElement('canvas');
+  cv.width = Math.max(10, Math.round(w * k));
+  cv.height = Math.max(10, Math.round(h * k));
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#1f5fa8';
+  const cw = cv.width / n, ch = cv.height / n;
+  for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+    if (grid(i, j)) ctx.fillRect(i * cw, j * ch, Math.ceil(cw), Math.ceil(ch));
+  }
+  const fig = document.createElement('figure');
+  fig.appendChild(cv);
+  fig.insertAdjacentHTML('beforeend', `<figcaption>${esc(label)}</figcaption>`);
+  return fig;
+}
+
+// Isometric view of the hull voxels (exposed faces only), box l x w x h.
+function isoCanvas(sh, l, w, h, size = 220) {
+  const n = sh.nx, dx = l / n, dy = w / n, dz = h / n;
+  const c30 = Math.cos(Math.PI / 6), s30 = 0.5;
+  const P = (x, y, z) => [(x - y) * c30, (x + y) * s30 - z];
+  const corners = [[0, 0, 0], [l, 0, 0], [0, w, 0], [l, w, 0], [0, 0, h], [l, 0, h], [0, w, h], [l, w, h]].map(c => P(...c));
+  const minX = Math.min(...corners.map(c => c[0])), maxX = Math.max(...corners.map(c => c[0]));
+  const minY = Math.min(...corners.map(c => c[1])), maxY = Math.max(...corners.map(c => c[1]));
+  const k = (size - 10) / Math.max(maxX - minX, maxY - minY);
+  const cv = document.createElement('canvas');
+  cv.width = Math.round((maxX - minX) * k + 10);
+  cv.height = Math.round((maxY - minY) * k + 10);
+  const ctx = cv.getContext('2d');
+  const S = (x, y, z) => { const p = P(x, y, z); return [(p[0] - minX) * k + 5, (p[1] - minY) * k + 5]; };
+  const occ = (i, j, m) => i >= 0 && j >= 0 && m >= 0 && i < n && j < n && m < n && sh.top[i + n * j] && sh.side[i + n * m];
+  const face = (pts, col) => {
+    ctx.beginPath();
+    pts.forEach((p, t) => { const q = S(...p); t ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1]); });
+    ctx.closePath();
+    ctx.fillStyle = col;
+    ctx.fill();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+  };
+  const vox = [];
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) for (let m = 0; m < n; m++) {
+    if (occ(i, j, m)) vox.push([i, j, m, (i + 0.5) * dx + (j + 0.5) * dy + (m + 0.5) * dz]);
+  }
+  vox.sort((a, b) => a[3] - b[3]); // far first (view from +x, +y, +z)
+  for (const [i, j, m] of vox) {
+    const x0 = i * dx, x1 = x0 + dx, y0 = j * dy, y1 = y0 + dy, z0 = m * dz, z1 = z0 + dz;
+    if (!occ(i + 1, j, m)) face([[x1, y0, z0], [x1, y1, z0], [x1, y1, z1], [x1, y0, z1]], '#5b86b8');
+    if (!occ(i, j + 1, m)) face([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], '#3f6a9c');
+    if (!occ(i, j, m + 1)) face([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], '#9cc0e6');
+  }
+  return cv;
+}
+
+function updatePreview() {
+  const prev = $('dwgPrev');
+  prev.innerHTML = '';
+  dwg.hull = null;
+  $('dwgSave').disabled = true;
+  if (!dwg.img) return;
+  const msgs = [];
+  for (const which of ['top', 'side']) {
+    if (dwg.rect[which] && !dwg.sil[which]) msgs.push(`${VIEW_LABEL[which]}: seçilen alanda kontur bulunamadı; eşiği değiştir ya da alanı yeniden seç.`);
+  }
+  const st = dwg.sil.top && dwg.sil.top.view, ss = dwg.sil.side && dwg.sil.side.view;
+  if (!st || !ss) {
+    dwgInfo(`${esc(dwg.label)}: ${!dwg.rect.top ? 'üst görünüşü' : 'yan görünüşü'} fareyle dikdörtgen içine al.` +
+      (msgs.length ? '<br>' + msgs.map(esc).join('<br>') : ''));
+    return;
+  }
+  const g = viewsToGrids(st, ss, GRID_N);
+  const hull = hullShape(g.top, g.side, GRID_N, GRID_N, GRID_N);
+  dwg.hull = hull;
+  dwg.grids = g;
+  const name = $('dwgItem').value;
+  const dims = drawingItems().get(name);
+  if (dims && dims.l > 0 && dims.w > 0 && dims.h > 0) msgs.push(...checkDims(g.ratios, dims.l, dims.w, dims.h));
+  msgs.push(...g.warnings);
+  const L = dims && dims.l > 0 ? dims.l : 1, Wd = dims && dims.w > 0 ? dims.w : g.ratios.wPerL, Hd = dims && dims.h > 0 ? dims.h : g.ratios.hPerL;
+  const n = GRID_N;
+  prev.appendChild(gridCanvas((i, j) => g.top[i + n * j], n, 'Üst görünüş (boy × genişlik)', L, Wd));
+  prev.appendChild(gridCanvas((i, j) => g.side[i + n * (n - 1 - j)], n, 'Yan görünüş (boy × yükseklik)', L, Hd));
+  const fig = document.createElement('figure');
+  fig.appendChild(isoCanvas(hull, L, Wd, Hd));
+  fig.insertAdjacentHTML('beforeend', '<figcaption>3B şekil (iki görünüşten)</figcaption>');
+  prev.appendChild(fig);
+  dwgInfo(`Şekil, dış kutusunun %${(100 * hull.volFrac).toFixed(1)}'i kadar hacim kaplıyor.` +
+    (dims ? ` Ölçüler listeden: ${dims.l} × ${dims.w} × ${dims.h} m.` : '') +
+    (msgs.length ? `<br><span style="color:#a35b00">${msgs.map(esc).join('<br>')}</span>` : ''));
+  $('dwgSave').disabled = !name;
+}
+
+function saveShape() {
+  const name = $('dwgItem').value;
+  if (!name || !dwg.hull) return;
+  shapes[name] = { ...dwg.hull, source: dwg.label };
+  saveShapes();
+  lastPlan = null;
+  refreshItems();
+  renderShapeList();
+  dwgInfo(`"${esc(name)}" için şekil kaydedildi. Planı oluşturunca bu şekil kullanılır.`);
+}
+
+function renderShapeList() {
+  const names = Object.keys(shapes);
+  $('shapeList').innerHTML = names.length ? '' : '';
+  names.forEach(n => {
+    const sh = shapes[n];
+    const d = document.createElement('div');
+    d.innerHTML = `<b>${esc(n)}</b><br>kutunun %${(100 * sh.volFrac).toFixed(1)}'i<br><span style="color:#777">${esc(sh.source || '')}</span><br>`;
+    const b = document.createElement('button');
+    b.textContent = 'Sil';
+    b.onclick = () => { delete shapes[n]; saveShapes(); lastPlan = null; renderShapeList(); refreshItems(); };
+    d.appendChild(b);
+    $('shapeList').appendChild(d);
+  });
+}
+
+// Example drawing (made up): an L-shaped part, 4 x 2 x 3 m, with dimensions and text.
+function sampleDrawing() {
+  const s = 100, cv = whiteCanvas(1300, 1050), ctx = cv.getContext('2d');
+  ctx.strokeStyle = '#000';
+  ctx.fillStyle = '#000';
+  const line = (pts, w, dash) => {
+    ctx.lineWidth = w;
+    ctx.setLineDash(dash || []);
+    ctx.beginPath();
+    pts.forEach((p, i) => (i ? ctx.lineTo(p[0], p[1]) : ctx.moveTo(p[0], p[1])));
+    ctx.stroke();
+    ctx.setLineDash([]);
+  };
+  const tx = 150, ty = 120, sx = 150, sy = 560, base = sy + 3 * s;
+  // top view
+  line([[tx, ty], [tx + 4 * s, ty], [tx + 4 * s, ty + 2 * s], [tx, ty + 2 * s], [tx, ty]], 6);
+  line([[tx + 2 * s, ty], [tx + 2 * s, ty + 2 * s]], 6);
+  line([[tx - 20, ty + s], [tx + 4 * s + 20, ty + s]], 1.5, [20, 6, 4, 6]);
+  line([[tx, ty + 2 * s + 8], [tx, ty + 2 * s + 60]], 1.5);
+  line([[tx + 4 * s, ty + 2 * s + 8], [tx + 4 * s, ty + 2 * s + 60]], 1.5);
+  line([[tx, ty + 2 * s + 50], [tx + 4 * s, ty + 2 * s + 50]], 1.5);
+  ctx.font = '28px sans-serif';
+  ctx.fillText('4000', tx + 2 * s - 30, ty + 2 * s + 42);
+  line([[tx + 4 * s + 8, ty], [tx + 4 * s + 60, ty]], 1.5);
+  line([[tx + 4 * s + 8, ty + 2 * s], [tx + 4 * s + 60, ty + 2 * s]], 1.5);
+  line([[tx + 4 * s + 50, ty], [tx + 4 * s + 50, ty + 2 * s]], 1.5);
+  ctx.fillText('2000', tx + 4 * s + 60, ty + s + 10);
+  ctx.fillText('ÜST GÖRÜNÜŞ', tx, ty - 30);
+  // side view
+  line([[sx, base], [sx + 4 * s, base], [sx + 4 * s, base - 1.5 * s], [sx + 2 * s, base - 1.5 * s], [sx + 2 * s, sy], [sx, sy], [sx, base]], 6);
+  line([[sx + 40, sy + 20], [sx + 40, base - 20]], 1.5, [12, 8]);
+  line([[sx + 4 * s + 8, base], [sx + 4 * s + 70, base]], 1.5);
+  line([[sx + 2 * s + 8, sy], [sx + 4 * s + 70, sy]], 1.5);
+  line([[sx + 4 * s + 60, sy], [sx + 4 * s + 60, base]], 1.5);
+  ctx.fillText('3000', sx + 4 * s + 70, sy + 1.5 * s);
+  line([[sx, base + 8], [sx, base + 60]], 1.5);
+  line([[sx + 2 * s, base + 8], [sx + 2 * s, base + 60]], 1.5);
+  line([[sx, base + 50], [sx + 2 * s, base + 50]], 1.5);
+  ctx.fillText('2000', sx + s - 30, base + 42);
+  ctx.fillText('YAN GÖRÜNÜŞ', sx, sy - 30);
+  // title block
+  line([[800, 880], [1280, 880], [1280, 1030], [800, 1030], [800, 880]], 2);
+  ctx.fillText('ÖRNEK ÇİZİM - GERÇEK PARÇA DEĞİL', 815, 930);
+  ctx.fillText('Makine E  4000 x 2000 x 3000', 815, 980);
+  return { cv, top: { x: 110, y: 70, w: 560, h: 300 }, side: { x: 110, y: 510, w: 600, h: 430 } };
+}
+
+function openSample() {
+  const d = sampleDrawing();
+  $('dwgStroke').value = 4;
+  setDrawing(d.cv, 'Örnek çizim (uydurma)');
+  if (!drawingItems().has('Makine E')) {
+    $('cargo').value = $('cargo').value.replace(/\s*$/, '') + '\nMakine E,4,2,3,6,2,1,yes,,,cizim,';
+    lastPlan = null;
+  }
+  refreshItems();
+  $('dwgItem').value = 'Makine E';
+  selectView('top', d.top);
+  selectView('side', d.side);
+  setMode(null);
+  saveShape();
+  dwgInfo($('dwgInfo').innerHTML + ' Örnek çizim açıldı, görünüşler seçildi ve listeye "Makine E" eklendi.');
+}
+
+$('dwgFile').onchange = e => openFile(e.target.files[0]);
+$('dwgPage').onchange = () => { if ($('dwgFile').files[0]) openFile($('dwgFile').files[0]); };
+$('dwgSample').onclick = openSample;
+$('selTop').onclick = () => setMode('top');
+$('selSide').onclick = () => setMode('side');
+$('rotTop').onclick = () => { dwg.rot.top = (dwg.rot.top + 1) % 4; extract('top'); updatePreview(); redraw(); };
+$('rotSide').onclick = () => { dwg.rot.side = (dwg.rot.side + 1) % 4; extract('side'); updatePreview(); redraw(); };
+$('dwgThr').oninput = () => { $('dwgThrV').textContent = $('dwgThr').value; extract('top'); extract('side'); updatePreview(); redraw(); };
+$('dwgStroke').onchange = () => { extract('top'); extract('side'); updatePreview(); redraw(); };
+$('dwgItem').onchange = updatePreview;
+$('dwgSave').onclick = saveShape;
+
 $('run').onclick = () => plan();
 ['cargo', 'n', 'L', 'bB', 'bT', 'H', 'mt', 'fl', 'rHolds', 'rPS', 'rHeavy'].forEach(id => { $(id).oninput = () => { lastPlan = null; }; });
+$('cargo').addEventListener('input', refreshItems);
+refreshItems();
+renderShapeList();
 $('csv').onclick = downloadCsv;
 plan();
 </script>

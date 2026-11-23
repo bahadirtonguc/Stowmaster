@@ -163,6 +163,25 @@ test('empty or tiny selections', () => {
   assert.strictEqual(D.extractSilhouette(c.g, 50, 50, { x: 0, y: 0, w: 2, h: 50 }), null);
 });
 
+test('coloured dimension lines are ignored with dropColor', () => {
+  // RGBA drawing: black 3 px outline 100 x 60, blue dimension lines closing a box under it
+  const W = 200, H = 140, rgba = new Uint8ClampedArray(W * H * 4).fill(255);
+  const px = (x, y, c) => { const p = 4 * (y * W + x); rgba[p] = c[0]; rgba[p + 1] = c[1]; rgba[p + 2] = c[2]; rgba[p + 3] = 255; };
+  const hline = (x0, x1, y, t, c) => { for (let x = x0; x <= x1; x++) for (let d = 0; d < t; d++) px(x, y + d, c); };
+  const vline = (x, y0, y1, t, c) => { for (let y = y0; y <= y1; y++) for (let d = 0; d < t; d++) px(x + d, y, c); };
+  const K = [0, 0, 0], B = [20, 40, 220];
+  hline(40, 140, 20, 3, K); hline(40, 140, 80, 3, K); vline(40, 20, 82, 3, K); vline(140, 20, 82, 3, K);
+  vline(40, 83, 110, 1, B); vline(142, 83, 110, 1, B); hline(40, 142, 105, 1, B); // extension + dimension line
+  const rect = { x: 20, y: 5, w: 160, h: 125 };
+  const plain = D.extractSilhouette(D.toGray(rgba, W, H), W, H, rect, { clean: 1 });
+  const dropped = D.extractSilhouette(D.toGray(rgba, W, H, { dropColor: true }), W, H, rect, { clean: 1 });
+  assert(plain.h > 80, 'without dropColor the dimension box is filled: ' + plain.h);
+  assert.deepStrictEqual([dropped.w, dropped.h], [103, 63]);
+  // grey and black stay ink
+  const g = D.toGray(new Uint8ClampedArray([90, 90, 90, 255, 200, 30, 30, 255]), 2, 1, { dropColor: true });
+  assert.deepStrictEqual([...g], [90, 255]);
+});
+
 test('toGray treats transparent as white', () => {
   const g = D.toGray(new Uint8ClampedArray([0, 0, 0, 255, 0, 0, 0, 0]), 2, 1);
   assert.deepStrictEqual([...g], [0, 255]);

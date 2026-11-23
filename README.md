@@ -138,21 +138,31 @@ Dikdörtgen prizma olmayan kalemler için:
 4. Önizlemede iki görünüşün ızgarası ve 3B şekil görünür. "Şekli bu kaleme kaydet" ile kaydet. Şekiller yalnızca bu tarayıcıda saklanır.
 
 Nasıl çalışır (`src/drawing.js`):
-1. Seçilen alanda koyu pikseller mürekkep sayılır ve küçük kopukluklar kapatılır.
+1. Seçilen alanda koyu pikseller mürekkep sayılır ve küçük kopukluklar kapatılır. "Renkli çizgileri yok say" açıksa (varsayılan) renkli pikseller kâğıt sayılır. Birçok CAD çiziminde parça siyah, ölçü, balon ve eksen çizgileri ise renkli çizilir; bu seçenek onları ayıklar. Siyah-beyaz çizimlerde etkisi yoktur.
 2. Dışarıdan ulaşılamayan her şey parça kabul edilir; konturun içi dolar.
 3. İnce çizgiler (ölçü, yazı, ok) temizlenir ve en büyük parça alınır.
 4. İki siluet 32×32 ızgaraya örneklenir. 3B şekil, iki görünüşe de uyan **en büyük** hacimdir: bir hücre, üst görünüşte ve yan görünüşte dolu ise doludur.
 
 Sonuç:
-- Şekil gerçek parçadan küçük çıkmaz.
+- Konturu her yerde kapalı çizilmiş bir parçada şekil gerçek parçadan küçük çıkmaz.
 - Örnekleme ve kontur kalınlığı yüzünden biraz büyük çıkar: testteki L parçada %75 yerine yaklaşık %78–81.
-- Yalnızca iki görünüşte görünmeyen girinti ve delikler dolu sayılır.
+- İki görünüşte görünmeyen girinti ve delikler dolu sayılır.
+- Konturu açık ya da çok ince çizilmiş bir bölüm (ör. ince bir boru) siluete girmeyebilir. O bölümde şekil gerçekte olduğundan küçük kalır. Önizlemede renkli siluete bakıp kontrol et.
 
 Ölçüler çizimden **okunmaz**; listeden alınır. Çizimin oranları listedeki ölçülerle %10'dan fazla farklıysa ya da iki görünüşte boy farklı çıkarsa uyarı verilir.
 
-Ölçü ve uzatma çizgileri konturla kapalı bir kutu oluşturursa, o kutu da parça sanılır. Bunu önlemenin iki yolu var:
-- Alanı konturun hemen dışından sıkı seç.
-- "En ince kontur" ayarını artır. Görünür kontur genelde ölçü çizgilerinden kalın çizilir; bu ayar, verilen kalınlıktan ince çizgileri doldurmadan önce yok sayar.
+Ölçü ve uzatma çizgileri konturla kapalı bir kutu oluşturursa ya da bir balon veya yazı parçaya çok yakın durursa, bunlar da parça sanılır. Önizlemede renkli siluete bakarak bunu görürsün; oranlar listeyle tutmazsa uygulama da uyarır. Düzeltme yolları:
+- Alanı konturun hemen dışından sıkı seç. Seçim kutusu yalnızca parçayı kapsamalı.
+- Ölçü çizgileri renkliyse "Renkli çizgileri yok say"ı açık tut.
+- "En ince kontur" ayarını artır. Görünür kontur ölçü çizgilerinden kalın çizilmişse, verilen kalınlıktan ince çizgiler doldurmadan önce yok sayılır.
+- "İnce ayrıntı temizleme" değerini artır. Parçaya ince bir bağla yapışan balon ve yazılar kopar, ama parçanın ince kısımları da aşınır.
+
+Gerçek bir çizimle deneme: bir motor ölçü çizimi (A3 PDF, beş görünüşlü, yüzlerce ince çizgi ve balon) üzerinde ortadaki yan görünüş ile alttaki üst görünüş seçildi. Renkli çizgiler yok sayılınca:
+- Çizimin oranlarından çıkan genişlik ve yükseklik, çizimdeki ölçülerle %1 içinde tuttu.
+- Üst görünüş kutusu birkaç balonu da kapsayınca genişlik %11 fazla çıktı ve uygulama uyardı. Kutu balonların altından başlatılınca uyarı kalktı.
+- Motor (dış kutusunun %65'i) hold'a yerleştirildi.
+
+O çizim telif hakkı korumalı olduğu için depoya eklenmedi.
 
 Yerleşimde şekilli kalem **dış kutusuyla** yer kaplar. Şeklin içindeki boşluk (ör. L parçanın kısa tarafının üstü) şimdilik başka yükle doldurulmaz. Bu hacim "silindir/çizim kutusu içindeki boşluk" olarak ayrıca raporlanır. Silindir ve çizimli kalemlerin üstüne katman içinde kolon kurulmaz.
 

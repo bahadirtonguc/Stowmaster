@@ -175,12 +175,18 @@ function checkDims(ratios, l, w, h, tol = 0.1) {
   return out;
 }
 
-// RGBA (canvas ImageData.data) -> gray
-function toGray(rgba, w, h) {
+// RGBA (canvas ImageData.data) -> gray.
+// opts.dropColor: coloured pixels (max - min channel above opts.colorTol, default 60) count
+// as paper. Many CAD drawings draw the part in black and dimensions, balloons, centre lines
+// and hatching in colour; dropping colour keeps only the part outline.
+function toGray(rgba, w, h, opts = {}) {
   const g = new Uint8ClampedArray(w * h);
+  const tol = opts.colorTol == null ? 60 : opts.colorTol;
   for (let k = 0, p = 0; k < w * h; k++, p += 4) {
+    const r = rgba[p], gr = rgba[p + 1], b = rgba[p + 2];
     const a = rgba[p + 3] / 255; // transparent pixels count as white paper
-    g[k] = (0.299 * rgba[p] + 0.587 * rgba[p + 1] + 0.114 * rgba[p + 2]) * a + 255 * (1 - a);
+    if (opts.dropColor && Math.max(r, gr, b) - Math.min(r, gr, b) > tol) { g[k] = 255; continue; }
+    g[k] = (0.299 * r + 0.587 * gr + 0.114 * b) * a + 255 * (1 - a);
   }
   return g;
 }

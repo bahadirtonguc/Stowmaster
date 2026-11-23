@@ -87,8 +87,10 @@ button:disabled{opacity:.5;cursor:default}
     <button id="selTop" class="sec" disabled>1. Üst görünüşü seç</button>
     <button id="selSide" class="sec" disabled>2. Yan görünüşü seç</button>
     <div style="display:flex;gap:6px"><button id="rotTop" class="sec" disabled>Üst ↻</button><button id="rotSide" class="sec" disabled>Yan ↻</button></div>
+    <label style="flex-direction:row;align-items:center;gap:6px"><input type="checkbox" id="dwgColor" checked> Renkli çizgileri yok say (ölçü, balon, eksen çizgileri renkliyse)</label>
     <label><span>Koyuluk eşiği: <span id="dwgThrV">160</span></span><input type="range" id="dwgThr" min="60" max="240" value="160"></label>
     <label>En ince kontur, px (0 = kapalı; ölçü çizgileri konturla kutu oluşturuyorsa artır)<input type="number" id="dwgStroke" value="0" min="0" max="30" step="1"></label>
+    <label>İnce ayrıntı temizleme, px (boş = otomatik; balon, yazı parçaya yapışıyorsa artır)<input type="number" id="dwgClean" value="" min="1" max="40" step="1"></label>
     <button id="dwgSave" disabled>Şekli bu kaleme kaydet</button>
   </div>
   <div>
@@ -370,7 +372,7 @@ const GRID_N = 32;
 const MAX_PX = 2400;
 const VIEW_LABEL = { top: 'Üst görünüş', side: 'Yan görünüş' };
 const VIEW_COLOR = { top: [46, 125, 50], side: [31, 95, 168] };
-const dwg = { img: null, gray: null, W: 0, H: 0, label: '', mode: null, drag: null,
+const dwg = { img: null, rgba: null, gray: null, W: 0, H: 0, label: '', mode: null, drag: null,
   rect: { top: null, side: null }, sil: { top: null, side: null }, rot: { top: 0, side: 0 }, hull: null, grids: null };
 
 const dwgInfo = (html) => { $('dwgInfo').innerHTML = html; };
@@ -438,7 +440,8 @@ function setDrawing(cv, label) {
   dwg.W = cv.width;
   dwg.H = cv.height;
   dwg.label = label;
-  dwg.gray = toGray(cv.getContext('2d').getImageData(0, 0, dwg.W, dwg.H).data, dwg.W, dwg.H);
+  dwg.rgba = cv.getContext('2d').getImageData(0, 0, dwg.W, dwg.H).data;
+  makeGray();
   dwg.rect = { top: null, side: null };
   dwg.sil = { top: null, side: null };
   dwg.rot = { top: 0, side: 0 };
@@ -457,6 +460,10 @@ function setDrawing(cv, label) {
   setMode('top');
   updatePreview();
   redraw();
+}
+
+function makeGray() {
+  dwg.gray = toGray(dwg.rgba, dwg.W, dwg.H, { dropColor: $('dwgColor').checked });
 }
 
 function setMode(m) {
@@ -502,8 +509,10 @@ function selectView(which, rect) {
 function extract(which) {
   const rect = dwg.rect[which];
   if (!rect || !dwg.gray) { dwg.sil[which] = null; return; }
+  const cl = $('dwgClean').value.trim();
   const s0 = extractSilhouette(dwg.gray, dwg.W, dwg.H, rect, {
-    threshold: +$('dwgThr').value, minStroke: Math.max(0, +$('dwgStroke').value || 0)
+    threshold: +$('dwgThr').value, minStroke: Math.max(0, +$('dwgStroke').value || 0),
+    clean: cl === '' ? undefined : Math.max(1, Math.round(+cl) || 1)
   });
   if (!s0) { dwg.sil[which] = null; return; }
   let s = s0;
@@ -654,7 +663,11 @@ function updatePreview() {
   dwg.grids = g;
   const name = $('dwgItem').value;
   const dims = drawingItems().get(name);
-  if (dims && dims.l > 0 && dims.w > 0 && dims.h > 0) msgs.push(...checkDims(g.ratios, dims.l, dims.w, dims.h));
+  if (dims && dims.l > 0 && dims.w > 0 && dims.h > 0) {
+    const dm = checkDims(g.ratios, dims.l, dims.w, dims.h);
+    msgs.push(...dm);
+    if (dm.length) msgs.push('Renkli siluette parçaya ait olmayan bir şey (balon, yazı, ölçü) varsa seçimi daralt ya da "ince ayrıntı temizleme" değerini artır.');
+  }
   msgs.push(...g.warnings);
   const L = dims && dims.l > 0 ? dims.l : 1, Wd = dims && dims.w > 0 ? dims.w : g.ratios.wPerL, Hd = dims && dims.h > 0 ? dims.h : g.ratios.hPerL;
   const n = GRID_N;
@@ -769,6 +782,8 @@ $('rotTop').onclick = () => { dwg.rot.top = (dwg.rot.top + 1) % 4; extract('top'
 $('rotSide').onclick = () => { dwg.rot.side = (dwg.rot.side + 1) % 4; extract('side'); updatePreview(); redraw(); };
 $('dwgThr').oninput = () => { $('dwgThrV').textContent = $('dwgThr').value; extract('top'); extract('side'); updatePreview(); redraw(); };
 $('dwgStroke').onchange = () => { extract('top'); extract('side'); updatePreview(); redraw(); };
+$('dwgClean').onchange = () => { extract('top'); extract('side'); updatePreview(); redraw(); };
+$('dwgColor').onchange = () => { if (!dwg.rgba) return; makeGray(); extract('top'); extract('side'); updatePreview(); redraw(); };
 $('dwgItem').onchange = updatePreview;
 $('dwgSave').onclick = saveShape;
 
